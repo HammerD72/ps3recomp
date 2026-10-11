@@ -89,6 +89,20 @@ int64_t sys_memory_allocate(ppu_context* ctx)
     /* Align bump pointer */
     g_sys_mem_bump_ptr = VM_ALIGN_UP(g_sys_mem_bump_ptr, alignment);
 
+    /* LV1 dual map: every handed-out page also lives at exactly +0x05000000,
+     * so a new real allocation must not land on an earlier allocation's alias
+     * image (0x46EBC100-class ambiguity: both the EA and its primary were
+     * registered, and no EA-based rule could tell alias from real memory).
+     * Walk forward until the candidate is conflict-free; alignment steps are
+     * at most 1MB so this is a bounded, cold loop. */
+    {
+        extern int sysmem_alias_va_conflicts(uint32_t, uint32_t);
+        while (g_sys_mem_bump_ptr + size <= SYS_MEM_ALLOC_END &&
+               sysmem_alias_va_conflicts(g_sys_mem_bump_ptr, size)) {
+            g_sys_mem_bump_ptr += alignment;
+        }
+    }
+
     /* Check if we have room */
     if (g_sys_mem_bump_ptr + size > SYS_MEM_ALLOC_END) {
         bump_unlock();
@@ -126,6 +140,10 @@ int64_t sys_memory_allocate(ppu_context* ctx)
     }
 
     fprintf(stderr, "[sys_memory] allocate -> 0x%08X\n", alloc_addr);
+    /* Register for the LV1 SPU alias window (spu_ea_alias.c): SPURS reaches
+     * this memory from SPU side as base|0x05000000. */
+    { extern void sysmem_alias_record(uint32_t, uint32_t);
+      sysmem_alias_record(alloc_addr, size); }
 
     if (addr_out != 0) {
         write_be32(addr_out, alloc_addr);
