@@ -98,6 +98,11 @@ jobs:
             python "$t"
           done
 
+      - name: Run memory capacity contract
+        run: |
+          ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }} -std=gnu17 -pthread -I runtime/syscalls -o /tmp/test_memory_capacity runtime/syscalls/tests/test_memory_capacity.c runtime/syscalls/sys_memory.c runtime/syscalls/spu_ea_alias.c
+          /tmp/test_memory_capacity
+
       - name: Run self-contained SPU helper tests
         run: |
           ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }} \

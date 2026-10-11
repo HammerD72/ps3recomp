@@ -151,6 +151,13 @@ jobs:
           ctest --test-dir build-sync-stress --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
+      - name: Run memory capacity contract
+        run: |
+          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I runtime/syscalls /Fe:test_memory_capacity.exe runtime/syscalls/tests/test_memory_capacity.c runtime/syscalls/sys_memory.c runtime/syscalls/spu_ea_alias.c
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          .\test_memory_capacity.exe
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - name: Run self-contained RSX tests
         # NOT shell: bash. Git Bash rewrites a leading-slash argument into a
         # Windows path, so /nologo arrived at the linker as an .obj under the
