@@ -462,6 +462,7 @@ if(UNIX)
             runtime/ppu/tests/boot_main.cpp
             runtime/ppu/tests/smoke/smoke_recomp.c
             runtime/ppu/ppu_loader.cpp
+            runtime/memory/guest_read_sync.c
             runtime/ppu/ppu_hle.cpp
             runtime/ppu/ppu_fs.cpp
             runtime/ppu/ppu_sysprx.cpp
@@ -534,3 +535,10 @@ message(STATUS "  C compiler:   ${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSIO
 message(STATUS "  C++ compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "  Build type:   ${CMAKE_BUILD_TYPE}")
 message(STATUS "")
+
+# Authored device pixels exercise actual HLE accessors and row conversion.
+if(BUILD_TESTING)
+    add_executable(test_cpu_surface_hle tests/test_cpu_surface_hle.c runtime/memory/guest_read_sync.c)
+    target_include_directories(test_cpu_surface_hle PRIVATE include libs/video runtime/ppu)
+    add_test(NAME cpu_surface_hle COMMAND test_cpu_surface_hle)
+endif()

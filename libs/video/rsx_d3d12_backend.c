@@ -134,6 +134,7 @@ typedef struct {
      * legacy replay pass skips them. */
     int   is_clear;
     float cc[4];
+    u32 cpu_address[4],cpu_pitch[4];
 } D3D12DrawRecord;
 
 /* Offscreen render target (render-to-texture). Persistent across frames --
@@ -145,6 +146,9 @@ typedef struct {
     u32                   dxgi;        /* DXGI_FORMAT of the resource */
     D3D12_RESOURCE_STATES st;          /* tracked resource state */
     int                   used;        /* referenced this frame */
+    u32 cpu_address,cpu_pitch,cpu_format;
+    u64 gpu_generation,cpu_generation;
+    ID3D12Resource *cpu_readback;
 } OffRT;
 #define MAX_OFF_RTS  16  /* demosaic double-buffers its 6-surface pass chain */
 #define RT_SRV_BASE  5   /* SRV heap slots 5..20 hold offscreen-RT SRVs */
@@ -3212,6 +3216,9 @@ static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
  * offset is the same buffer (surface and texture registers share the offset
  * space; location bits differ but one title doesn't alias local vs main at
  * one offset), which sidesteps guessing the surface's context DMA location. */
+#define CPU_SURFACE_CAPACITY MAX_OFF_RTS
+#include "rsx_cpu_surface.inc"
+
 static u32 current_rt_off(u32* out_w, u32* out_h, u32 out_mrt[3])
 {
     extern int cellGcmOffsetIsDisplay(u32 offset);
@@ -3314,6 +3321,7 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
          * replacement reads back empty. Let the GPU finish first. Recreations are
          * rare (a surface changing size), so the stall costs nothing. */
         wait_for_gpu();
+        cpu_surface_retire(r);
         r->res->lpVtbl->Release(r->res); r->res = NULL;   /* dims/format changed */
         if (r->up) { r->up->lpVtbl->Release(r->up); r->up = NULL; }
     } else {
@@ -3324,6 +3332,7 @@ static int off_rt_get(u32 off, u32 w, u32 h, u32 rsx_fmt)
                 if (!s_d3d.off_rt[i].used) { slot = i; break; }
             if (slot < 0) return -1;
             wait_for_gpu();   /* same hazard as above: the frame may still use it */
+                cpu_surface_retire(&s_d3d.off_rt[slot]);
             s_d3d.off_rt[slot].res->lpVtbl->Release(s_d3d.off_rt[slot].res);
             s_d3d.off_rt[slot].res = NULL;
             if (s_d3d.off_rt[slot].up) {
@@ -3815,6 +3824,7 @@ static void render_frame(void)
 
     /* Reset command allocator and list */
     s_d3d.cmd_allocators[fi]->lpVtbl->Reset(s_d3d.cmd_allocators[fi]);
+    s_cpu_surface_recording=1;
     s_d3d.cmd_list->lpVtbl->Reset(s_d3d.cmd_list, s_d3d.cmd_allocators[fi], NULL);
 
     /* Upload the bound font atlas into an R8_UNORM texture and create its SRV.
@@ -4043,11 +4053,13 @@ static void render_frame(void)
     for (int _i = 0; _i < MAX_OFF_RTS; _i++) s_d3d.off_rt[_i].used = 0;
     for (u32 _d = 0; _d < s_d3d.draw_count && _d < MAX_DRAWS; _d++) {
         D3D12DrawRecord* dr = &s_d3d.draws[_d];
-        if (dr->is_vp && dr->rt_off)
-            off_rt_get(dr->rt_off, dr->rt_w, dr->rt_h, dr->rt_fmt);
+        if (dr->is_vp && dr->rt_off) {
+            int index=off_rt_get(dr->rt_off, dr->rt_w, dr->rt_h, dr->rt_fmt);
+            cpu_surface_bind(index,dr,0);
+        }
         for (int _m = 0; _m < 3; _m++)
             if (dr->is_vp && dr->rt_mrt[_m])
-                off_rt_get(dr->rt_mrt[_m], dr->rt_w, dr->rt_h, dr->rt_fmt);
+                {int index=off_rt_get(dr->rt_mrt[_m], dr->rt_w, dr->rt_h, dr->rt_fmt);cpu_surface_bind(index,dr,(unsigned)_m+1);}
     }
 
     /* Per-frame VP textures + guest-FP pipelines: for each VP draw, upload the
@@ -4532,6 +4544,7 @@ static void render_frame(void)
                     for (int _m = 0; _m < 3; _m++) cur_m[_m] = wantm[_m];
                 }
                 if (dr->is_clear) {
+                    cpu_surface_written(cur_rt,cur_m);
                     D3D12_CPU_DESCRIPTOR_HANDLE rh =
                         (cur_rt >= 0) ? off_rt_rtv(cur_rt) : rtv_handle;
                     /* RT_CLEARDBG=1: clear offscreen targets to magenta rather
@@ -4643,6 +4656,7 @@ static void render_frame(void)
                       s_d3d.cmd_list->lpVtbl->OMSetRenderTargets(
                           s_d3d.cmd_list, bn, brh, FALSE, &dsv_handle);
                   } }
+                cpu_surface_written(cur_rt,cur_m);
                 s_d3d.cmd_list->lpVtbl->DrawInstanced(s_d3d.cmd_list,
                     dr->vertex_count, 1, dr->vb_byte_offset / 256, 0);
                 /* VP_SUBMIT=<N>: prove the VP pass actually reaches the GPU.
@@ -4916,6 +4930,7 @@ skip_dump_consider: ;
     s_d3d.cmd_list->lpVtbl->Close(s_d3d.cmd_list);
     ID3D12CommandList* cmd_lists[] = {(ID3D12CommandList*)s_d3d.cmd_list};
     s_d3d.cmd_queue->lpVtbl->ExecuteCommandLists(s_d3d.cmd_queue, 1, cmd_lists);
+    s_cpu_surface_recording=0;
 
     /* D3D12_IQ=1: drain the debug layer's message queue after submitting the
      * frame. The legacy (is_vp=0) DrawInstanced path silently produced ZERO
@@ -5208,6 +5223,7 @@ static void d3d12_clear(void* ud, u32 flags, u32 color, float depth, u8 stencil)
             dr->rt_off = rt; memcpy(dr->rt_mrt, mrt, sizeof(mrt));
             dr->rt_w = rt_w; dr->rt_h = rt_h;
             dr->rt_fmt = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->surface_format : 0;
+        cpu_surface_capture(dr);
             memcpy(dr->cc, cc, sizeof(cc));
         }
         return;
@@ -6087,6 +6103,7 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
                                 dr->blend, dr->blend_key, 10); } }
                 dr->rt_off = current_rt_off(&dr->rt_w, &dr->rt_h, dr->rt_mrt);
                 dr->rt_fmt = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->surface_format : 0;
+        cpu_surface_capture(dr);
                 if (s_d3d.current_rsx_state) {
                     dr->vp_x = s_d3d.current_rsx_state->viewport_x;
                     dr->vp_y = s_d3d.current_rsx_state->viewport_y;
@@ -6203,6 +6220,7 @@ static void d3d12_draw_arrays(void* ud, u32 primitive, u32 first, u32 count)
             dr->blend_key = rsx_blend_key(s_d3d.current_rsx_state, dr->blend);
             dr->rt_off = current_rt_off(&dr->rt_w, &dr->rt_h, dr->rt_mrt);
             dr->rt_fmt = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->surface_format : 0;
+        cpu_surface_capture(dr);
             if (s_d3d.current_rsx_state) {
                 dr->vp_x = s_d3d.current_rsx_state->viewport_x;
                 dr->vp_y = s_d3d.current_rsx_state->viewport_y;
@@ -6346,6 +6364,7 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
         dr->blend_key = rsx_blend_key(s_d3d.current_rsx_state, dr->blend);
         dr->rt_off = current_rt_off(&dr->rt_w, &dr->rt_h, dr->rt_mrt);
         dr->rt_fmt = s_d3d.current_rsx_state ? s_d3d.current_rsx_state->surface_format : 0;
+        cpu_surface_capture(dr);
         if (s_d3d.current_rsx_state) {
             dr->vp_x = s_d3d.current_rsx_state->viewport_x;
             dr->vp_y = s_d3d.current_rsx_state->viewport_y;
@@ -6652,6 +6671,7 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
     s_d3d12_backend.draw_indexed      = d3d12_draw_indexed;
     s_d3d12_backend.bind_texture      = d3d12_bind_texture;
 
+    cpu_surface_init();
     rsx_set_backend(&s_d3d12_backend);
 
     s_d3d.initialized = 1;
@@ -6664,6 +6684,7 @@ int rsx_d3d12_backend_init(u32 width, u32 height, const char* title)
 void rsx_d3d12_backend_shutdown(void)
 {
     if (!s_d3d.initialized) return;
+    cpu_surface_shutdown();
 
     wait_for_gpu();
 
@@ -6700,6 +6721,7 @@ void rsx_d3d12_backend_shutdown(void)
 
 int rsx_d3d12_backend_pump_messages(void)
 {
+    cpu_surface_service();
     MSG msg;
     while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
         if (msg.message == WM_QUIT) return -1;
