@@ -426,8 +426,7 @@ static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task,
         run[t / 8] |= m;
         fprintf(stderr, "[taskset] start task %u of taskset 0x%08X elf=0x%08X "
                         "(after task %u exited)\n", t, taskset_ea, elf, done_task);
-        g_ydkj_real_taskset_ea = taskset_ea; g_ydkj_real_taskid = t;
-        spu_workload_dispatch_async(vm_base + elf, (uint32_t)sz, ctx);
+        spu_workload_dispatch_task(vm_base + elf, (uint32_t)sz, ctx, NULL, taskset_ea, t);
     }
     ts_unlock();
 }
@@ -492,9 +491,9 @@ static void spu_async_run(spu_async_job* j)
                  * ptr (LS[0x1C0]) was a hardcoded 0x40009D00 that mismatched the game's
                  * real 0x40009F00 -> policy DMA'd garbage -> null branches. */
                 extern uint64_t spurs_pm_build_context(uint8_t*, uint32_t, uint32_t, uint32_t, uint32_t);
-                extern uint32_t g_ydkj_real_spurs_ea, g_ydkj_real_taskset_ea, g_ydkj_real_taskid;
-                if (g_ydkj_real_taskset_ea)
-                    spurs_pm_build_context(ls, g_ydkj_real_taskset_ea, g_ydkj_real_taskid, 0, 0);
+                extern uint32_t g_ydkj_real_spurs_ea;
+                if (j->taskset_ea)
+                    spurs_pm_build_context(ls, j->taskset_ea, j->taskid, 0, 0);
                 uint32_t inst = g_ydkj_real_spurs_ea ? g_ydkj_real_spurs_ea : 0x40009D00u;
                 uint8_t* p = ls + 0x1C0;
                 p[0]=0; p[1]=0; p[2]=0; p[3]=0;                 /* hi32 of u64 */
@@ -522,13 +521,12 @@ static void spu_async_run(spu_async_job* j)
              * Gate: default on for image 22 unless YDKJ_NO_CRI_CTX. */
             if (j->image_id == 22 && !getenv("YDKJ_NO_CRI_CTX")) {
                 extern uint64_t spurs_pm_build_context(uint8_t*, uint32_t, uint32_t, uint32_t, uint32_t);
-                extern uint32_t g_ydkj_real_taskset_ea, g_ydkj_real_taskid;
                 #define LSBE32(o,v) do{uint32_t _v=(v);ls[(o)+0]=(uint8_t)(_v>>24);ls[(o)+1]=(uint8_t)(_v>>16);ls[(o)+2]=(uint8_t)(_v>>8);ls[(o)+3]=(uint8_t)_v;}while(0)
-                if (g_ydkj_real_taskset_ea && !getenv("YDKJ_MINIMAL_CTX")) {
+                if (j->taskset_ea && !getenv("YDKJ_MINIMAL_CTX")) {
                     /* REAL taskset context: build the SpursTasksetContext at LS 0x2700
                      * from the actual BE CellSpursTaskset (spurs ptr, args, TaskInfo)
                      * so the cri leaf reads valid data instead of my planted guesses. */
-                    uint64_t elf = spurs_pm_build_context(ls, g_ydkj_real_taskset_ea, g_ydkj_real_taskid, 0, 0);
+                    uint64_t elf = spurs_pm_build_context(ls, j->taskset_ea, j->taskid, 0, 0);
                     /* --- Golden-reference context fields for the CRI task, recovered from a
                      * WORKING RPCS3 SPU-LS snapshot via caner's rpcs3-guest-memory-dumper fork
                      * (github.com/canersaka/rpcs3-guest-memory-dumper): YDKJ BLUS30569, SPU0
@@ -564,7 +562,7 @@ static void spu_async_run(spu_async_job* j)
                       if ((_e=getenv("YDKJ_G1_CTX")))   { uint32_t v=(uint32_t)strtoul(_e,0,0);
                           LSBE32(0x2798,v); LSBE32(0x279C,v); } }
                     fprintf(stderr, "[cri] REAL SpursTasksetContext built from taskset 0x%08X task %u (elf=0x%llX)\n",
-                            g_ydkj_real_taskset_ea, g_ydkj_real_taskid, (unsigned long long)elf);
+                            j->taskset_ea, j->taskid, (unsigned long long)elf);
                 } else {
                     LSBE32(0x27C0, 0x100);     /* kernelMgmtAddr -> SPURS kernel ctx @LS 0x100 */
                     LSBE32(0x27C4, 0xA70);     /* syscallAddr -> HLE PM syscall trampoline (0xA70) */
@@ -1141,9 +1139,11 @@ int spu_taskset_wait_signal(uint32_t taskset_ea, uint32_t taskId)
     return 0;
 }
 
-int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
-                                uint32_t args_ea)
+int spu_workload_dispatch_task(const uint8_t* image, uint32_t image_size,
+                               uint32_t args_ea, const uint32_t* task_arg,
+                               uint32_t taskset_ea, uint32_t taskid)
 {
+    if (taskid >= 128 || (!taskset_ea && taskid)) return 0;
     if (!image || image_size == 0) return 0;
 
     uint64_t fp = spu_workload_fingerprint(image, image_size);
@@ -1182,18 +1182,17 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
     if (!j) return 0;
     j->image = image; j->image_size = image_size; j->args_ea = args_ea;
     j->fn = fn; j->image_id = image_id;
-    /* Capture the taskset+taskid NOW (PPU thread, right after cellSpursCreateTask
-     * set the globals for THIS task). Reading them later in the async thread races
-     * the next CreateTask overwriting the single-slot globals -- with two audio
-     * tasks that made both run task 1's descriptor. */
-    { extern uint32_t g_ydkj_real_taskset_ea, g_ydkj_real_taskid;
-      j->taskset_ea = g_ydkj_real_taskset_ea; j->taskid = g_ydkj_real_taskid; }
+    /* Ownership comes from this call, independently of other dispatchers. */
+    j->taskset_ea = taskset_ea; j->taskid = taskid;
     /* Capture the SPURS task r3 NOW (PPU thread, synchronous) from the game's
      * descriptor at eaContext+0x10 = {0x40-marker handle, workload EAs}; the
      * async SPU thread reading it later would race the PPU stack. word1 is
      * overridden to args_ea (eaContext) in spu_run_lifted_job_abi. */
     j->have_r3 = 0;
-    if (args_ea) {
+    if (task_arg) {
+        memcpy(j->r3, task_arg, sizeof j->r3);
+        j->have_r3 = 1;
+    } else if (args_ea) {
         extern uint8_t* vm_base;
         const uint8_t* c = vm_base + args_ea + 0x10;
         for (int k = 0; k < 4; k++)
@@ -1261,4 +1260,10 @@ int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
     pthread_detach(th);
 #endif
     return 1;
+}
+
+int spu_workload_dispatch_async(const uint8_t* image, uint32_t image_size,
+                                uint32_t args_ea)
+{
+    return spu_workload_dispatch_task(image, image_size, args_ea, NULL, 0, 0);
 }
