@@ -96,7 +96,7 @@ jobs:
       # the platform most contributors build on.
       - name: Run self-contained SPU helper tests
         run: |
-          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I include /I runtime/spu /Fe:test_spu_helpers.exe runtime/spu/tests/test_spu_helpers.c
+          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I include /I runtime/spu /Fe:test_spu_helpers.exe runtime/spu/tests/test_spu_helpers.c runtime/memory/guest_read_sync.c
           if ($LASTEXITCODE -ne 0) { exit 1 }
           .\test_spu_helpers.exe
           if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -105,7 +105,7 @@ jobs:
       # handler is called through the NID it registered under.
       - name: Run the sys_net loopback test
         run: |
-          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I include /Fe:test_sys_net.exe libs/network/tests/test_sys_net.c ws2_32.lib
+          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I include /Fe:test_sys_net.exe libs/network/tests/test_sys_net.c ws2_32.lib runtime/memory/guest_read_sync.c
           if ($LASTEXITCODE -ne 0) { exit 1 }
           .\test_sys_net.exe
           if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -114,7 +114,7 @@ jobs:
       # packing, and the room structs a title reads.
       - name: Run the Matching2 test
         run: |
-          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I include /Fe:test_np_matching2.exe libs/network/tests/test_np_matching2.c
+          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I include /Fe:test_np_matching2.exe libs/network/tests/test_np_matching2.c runtime/memory/guest_read_sync.c
           if ($LASTEXITCODE -ne 0) { exit 1 }
           .\test_np_matching2.exe
           if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -123,7 +123,7 @@ jobs:
       # and PSN's online ID rules.
       - name: Run the player-name test
         run: |
-          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I include /Fe:test_np_identity.exe libs/network/tests/test_np_identity.c ws2_32.lib
+          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I include /Fe:test_np_identity.exe libs/network/tests/test_np_identity.c ws2_32.lib runtime/memory/guest_read_sync.c
           if ($LASTEXITCODE -ne 0) { exit 1 }
           .\test_np_identity.exe
           if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -132,7 +132,7 @@ jobs:
       # packets before the title sees them, punching toward peers.
       - name: Run the NAT traversal test
         run: |
-          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I include /Fe:test_np_nat.exe libs/network/tests/test_np_nat.c ws2_32.lib
+          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I include /Fe:test_np_nat.exe libs/network/tests/test_np_nat.c ws2_32.lib runtime/memory/guest_read_sync.c
           if ($LASTEXITCODE -ne 0) { exit 1 }
           .\test_np_nat.exe
           if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -163,11 +163,11 @@ jobs:
         # Windows path, so /nologo arrived at the linker as an .obj under the
         # Git install directory. PowerShell leaves MSVC-style flags alone.
         run: |
-          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I include /I libs/video /Fe:test_texture_layout.exe libs/video/tests/test_texture_layout.c libs/video/rsx_texture_layout.c
+          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I include /I libs/video /Fe:test_texture_layout.exe libs/video/tests/test_texture_layout.c libs/video/rsx_texture_layout.c runtime/memory/guest_read_sync.c
           if ($LASTEXITCODE -ne 0) { exit 1 }
           .\test_texture_layout.exe
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I include /I libs/video /Fe:test_rsx_primitives.exe libs/video/tests/test_rsx_primitives.c
+          clang-cl /nologo /W0 /D_CRT_SECURE_NO_WARNINGS /I include /I libs/video /Fe:test_rsx_primitives.exe libs/video/tests/test_rsx_primitives.c runtime/memory/guest_read_sync.c
           if ($LASTEXITCODE -ne 0) { exit 1 }
           .\test_rsx_primitives.exe
           if ($LASTEXITCODE -ne 0) { exit 1 }

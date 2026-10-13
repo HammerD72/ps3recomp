@@ -68,43 +68,43 @@ jobs:
       # here and not on the Linux or Windows jobs.
       - name: Run self-contained sysutil tests
         run: |
-          clang -std=gnu17 -I include                 libs/system/tests/test_dialog_callbacks.c libs/system/cellSysutil.c                 -Wl,-dead_strip -pthread -o /tmp/test_dialog_callbacks
+          clang -std=gnu17 -I include                 libs/system/tests/test_dialog_callbacks.c libs/system/cellSysutil.c                 -Wl,-dead_strip -pthread -o /tmp/test_dialog_callbacks runtime/memory/guest_read_sync.c
           /tmp/test_dialog_callbacks
-          clang -std=gnu17 -I include                 libs/system/tests/test_savedata_fixed.c                 -Wl,-dead_strip -o /tmp/test_savedata_fixed
+          clang -std=gnu17 -I include                 libs/system/tests/test_savedata_fixed.c                 -Wl,-dead_strip -o /tmp/test_savedata_fixed runtime/memory/guest_read_sync.c
           /tmp/test_savedata_fixed
 
       - name: Run self-contained SPU helper tests
         run: |
           clang -std=gnu17 -I include -I runtime/spu \
-                -o /tmp/test_spu_helpers runtime/spu/tests/test_spu_helpers.c -lm
+                -o /tmp/test_spu_helpers runtime/spu/tests/test_spu_helpers.c -lm runtime/memory/guest_read_sync.c
           /tmp/test_spu_helpers
 
       # libnet over host sockets (PS3_NET_ONLINE), end to end on loopback: every
       # handler is called through the NID it registered under.
       - name: Run the sys_net loopback test
         run: |
-          clang -std=gnu17 -I include -o /tmp/test_sys_net libs/network/tests/test_sys_net.c
+          clang -std=gnu17 -I include -o /tmp/test_sys_net libs/network/tests/test_sys_net.c runtime/memory/guest_read_sync.c
           /tmp/test_sys_net
 
       # Matching2 over psnr without a server: response relocation, attribute
       # packing, and the room structs a title reads.
       - name: Run the Matching2 test
         run: |
-          clang -std=gnu17 -I include -o /tmp/test_np_matching2 libs/network/tests/test_np_matching2.c
+          clang -std=gnu17 -I include -o /tmp/test_np_matching2 libs/network/tests/test_np_matching2.c runtime/memory/guest_read_sync.c
           /tmp/test_np_matching2
 
       # The player name: --username, PS3_NP_ONLINE_ID, the OS login online,
       # and PSN's online ID rules.
       - name: Run the player-name test
         run: |
-          clang -std=gnu17 -I include -o /tmp/test_np_identity libs/network/tests/test_np_identity.c
+          clang -std=gnu17 -I include -o /tmp/test_np_identity libs/network/tests/test_np_identity.c runtime/memory/guest_read_sync.c
           /tmp/test_np_identity
 
       # NAT traversal: probing psnr from the P2P socket, dropping psnr's
       # packets before the title sees them, punching toward peers.
       - name: Run the NAT traversal test
         run: |
-          clang -std=gnu17 -I include -o /tmp/test_np_nat libs/network/tests/test_np_nat.c
+          clang -std=gnu17 -I include -o /tmp/test_np_nat libs/network/tests/test_np_nat.c runtime/memory/guest_read_sync.c
           /tmp/test_np_nat
 
       # Drives a real NV4097 command buffer through cellGcm -> RSX -> the Metal
@@ -291,26 +291,26 @@ jobs:
       # regression net for having lifted that maths out of the D3D12 uploader.
       - name: Run self-contained RSX tests
         run: |
-          clang -std=gnu17 -Wall -Wextra -I include -I libs/video -o /tmp/test_texture_layout libs/video/tests/test_texture_layout.c libs/video/rsx_texture_layout.c
+          clang -std=gnu17 -Wall -Wextra -I include -I libs/video -o /tmp/test_texture_layout libs/video/tests/test_texture_layout.c libs/video/rsx_texture_layout.c runtime/memory/guest_read_sync.c
           /tmp/test_texture_layout
-          clang -std=gnu17 -Wall -Wextra -I include -I libs/video -o /tmp/test_rsx_primitives libs/video/tests/test_rsx_primitives.c
+          clang -std=gnu17 -Wall -Wextra -I include -I libs/video -o /tmp/test_rsx_primitives libs/video/tests/test_rsx_primitives.c runtime/memory/guest_read_sync.c
           /tmp/test_rsx_primitives
           # The fragment-program decoder on its own: the word swap, source
           # swizzles and types, the dest mask, inline constants, which
           # register file the colour export comes from, and how many
           # SV_TARGETs a program that writes more than one export gets.
-          clang -std=gnu17 -Wall -Wextra -I include -o /tmp/test_fp_decompiler libs/video/tests/test_fp_decompiler.c libs/video/rsx_fp_decompiler.c
+          clang -std=gnu17 -Wall -Wextra -I include -o /tmp/test_fp_decompiler libs/video/tests/test_fp_decompiler.c libs/video/rsx_fp_decompiler.c runtime/memory/guest_read_sync.c
           /tmp/test_fp_decompiler
           # The register-file draw engine's platform-neutral halves against a
           # stub backend -- surface keying and reallocation, render-target
           # aliasing on a texture bind, the texture cache's revalidation and
           # eviction, the pipeline key's stability under constant changes, and
           # restart cuts bounding topology expansion. Runs on Linux too.
-          clang -std=gnu17 -Wall -Wextra -Wno-unused-parameter -I include -I libs/video -o /tmp/test_rsx_draw_engine libs/video/tests/test_rsx_draw_engine.c libs/video/rsx_draw_engine.c libs/video/rsx_dispatch.c libs/video/rsx_vertex_compact.c libs/video/rsx_texture_layout.c libs/video/rsx_vp_decompiler.c libs/video/rsx_fp_decompiler.c
+          clang -std=gnu17 -Wall -Wextra -Wno-unused-parameter -I include -I libs/video -o /tmp/test_rsx_draw_engine libs/video/tests/test_rsx_draw_engine.c libs/video/rsx_draw_engine.c libs/video/rsx_dispatch.c libs/video/rsx_vertex_compact.c libs/video/rsx_texture_layout.c libs/video/rsx_vp_decompiler.c libs/video/rsx_fp_decompiler.c runtime/memory/guest_read_sync.c
           /tmp/test_rsx_draw_engine
           # The NV4097 method decoder on its own: the vertex-constant window is
           # 32 dwords and the registers after it are not constants.
-          clang -std=gnu17 -Wall -Wextra -I include -I libs/video -o /tmp/test_rsx_transform_constants libs/video/tests/test_rsx_transform_constants.c libs/video/rsx_commands.c
+          clang -std=gnu17 -Wall -Wextra -I include -I libs/video -o /tmp/test_rsx_transform_constants libs/video/tests/test_rsx_transform_constants.c libs/video/rsx_commands.c runtime/memory/guest_read_sync.c
           /tmp/test_rsx_transform_constants
 
       # The Win32 shim the runtime runs through on macOS: interlocked widths
@@ -357,7 +357,7 @@ jobs:
       - name: Run the PPU/SPU lock-line coherence tests
         run: |
           clang -std=gnu17 -I include -I runtime/spu \
-                -o /tmp/test_spu_coherency runtime/spu/tests/test_spu_coherency.c
+                -o /tmp/test_spu_coherency runtime/spu/tests/test_spu_coherency.c runtime/memory/guest_read_sync.c
           /tmp/test_spu_coherency
 
       # The other writer: an SPU. Five SPURS kernels share one management line,
@@ -374,7 +374,7 @@ jobs:
             runtime/spu/spu_tsp_weak.c runtime/spu/spu_vm_pagemap.c \
             runtime/spu/spurs_policy_blob_weak.c runtime/spu/spu_interp.c \
             runtime/platform/win32_compat.c \
-            -lpthread -lm
+            -lpthread -lm runtime/memory/guest_read_sync.c
           /tmp/test_spu_lockline_peer
 
       # A task parked in WAIT_SIGNAL, signalled by another SPU. libspurs does
@@ -391,7 +391,7 @@ jobs:
             runtime/spu/spu_tsp_weak.c runtime/spu/spu_vm_pagemap.c \
             runtime/spu/spurs_policy_blob_weak.c runtime/spu/spu_interp.c \
             runtime/platform/win32_compat.c \
-            -lpthread -lm
+            -lpthread -lm runtime/memory/guest_read_sync.c
           /tmp/test_spu_taskset_wake
 
       # A thread group starting its threads on their image's LIFTED code. This
@@ -416,7 +416,7 @@ jobs:
             runtime/spu/spu_interp.c runtime/spu/spu_lifted_thread.c \
             runtime/syscalls/spu_fallback.c runtime/syscalls/sdk_version_weak.c \
             runtime/platform/win32_compat.c \
-            -lpthread -lm
+            -lpthread -lm runtime/memory/guest_read_sync.c
           /tmp/test_spu_lifted_start
 
       # The per-context MFC engine table, which the group above writes from
@@ -438,5 +438,5 @@ jobs:
             runtime/spu/spu_tsp_weak.c runtime/spu/spu_vm_pagemap.c \
             runtime/spu/spurs_policy_blob_weak.c runtime/spu/spu_interp.c \
             runtime/platform/win32_compat.c \
-            -lpthread -lm
+            -lpthread -lm runtime/memory/guest_read_sync.c
           /tmp/test_spu_mfc_slots
