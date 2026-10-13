@@ -28,6 +28,7 @@ endif()
 add_executable(fiber_switch
     main.c
     "${PS3RECOMP_TREE_ROOT}/libs/spurs/cellFiber.c"
+    "${PS3RECOMP_TREE_ROOT}/runtime/memory/guest_read_sync.c"
 )
 
 target_include_directories(fiber_switch PRIVATE
