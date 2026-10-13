@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 uint8_t* vm_base;
+uint32_t sysmem_spu_alias_fixup(uint32_t a) { if (a >= 0x50000) abort(); return a; }
 volatile int g_spu_coh_armed;
 int g_resv_store_active;
 uint32_t g_ww_lo, g_ww_hi;
