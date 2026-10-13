@@ -53,6 +53,13 @@ int spu_workload_dispatch_task(const uint8_t *p, uint32_t n, uint32_t a,
                                       );
 }
 
+#ifdef SPU_TASK_LIFECYCLE_H
+int spu_workload_dispatch_owned(const uint8_t* p, uint32_t n, uint32_t a,
+                                const uint32_t* arg, const spu_task_owner* owner) {
+    if (!owner || !owner->generation || !owner->dispatch) abort();
+    return spu_workload_dispatch_task(p, n, a, arg, owner->taskset_ea, owner->taskid);
+}
+#endif
 static int failures;
 static void prepare(uint8_t expected[128]) {
     memset(vm_base + TS - 16, 0x7B, 0x1900 + 32);
