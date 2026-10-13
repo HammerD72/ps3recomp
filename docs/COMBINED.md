@@ -51,6 +51,12 @@ compile lists include the task-lifecycle module alongside workload code.
 All four CI workflows run on pushes to `combined`; hosted results remain the
 authority for platforms not executed locally.
 
+Initial hosted runs exposed the same read-coherence dependency in standalone
+network, savedata and SPU fixtures. Their direct compile commands now link the
+module. The guest-field runner also accepts `clang-cl` from PATH when the optional
+local `MV_CLANG` override is absent. Keep CI failures visible while validating
+these integration dependencies; none of these changes suppresses a test.
+
 These are authored/runtime tests without original game inputs. No native
 MotorStorm run was performed with this merged fork, no speedup was measured,
 and no bike/menu/race acceptance follows. FFmpeg decoding was not enabled in

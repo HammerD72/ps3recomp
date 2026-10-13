@@ -64,7 +64,7 @@ def main():
     override = 'task_arg' in signature.group()
     if os.name == 'nt':
         exe = out/'fixture.exe'
-        command = [env['MV_CLANG'], '/nologo', '/TC', '/O1', '/D_CRT_SECURE_NO_WARNINGS']
+        command = [env.get('MV_CLANG', 'clang-cl'), '/nologo', '/TC', '/O1', '/D_CRT_SECURE_NO_WARNINGS']
         if override:
             command.append('/DSPURS_DISPATCH_HAS_OVERRIDE')
         command += ['/I'+str(p) for p in includes] + ['/Fe'+str(exe), *map(str, inputs)]
