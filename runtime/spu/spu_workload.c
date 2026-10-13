@@ -391,13 +391,17 @@ static void spu_taskset_mark(uint32_t taskset_ea, uint32_t t, int on)
     ts_unlock();
 }
 
-static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
+#include "spu_task_lifecycle_trace.h"
+
+static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task,
+                                    int image, const uint8_t* ls)
 {
     extern uint8_t* vm_base;
     extern uint32_t g_ydkj_real_taskset_ea, g_ydkj_real_taskid;
     ts_lock();
     uint8_t* ts = vm_base + taskset_ea;
     uint8_t* run = ts_running(taskset_ea);
+    spu_task_lifecycle_trace("return-before", image, UINT32_MAX, taskset_ea, done_task, ls, ts);
     if (done_task < 128) {
         uint8_t m = (uint8_t)(0x80u >> (done_task & 7));
         ts[0x10 + done_task / 8] &= (uint8_t)~m;
@@ -405,6 +409,7 @@ static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
         ts[0x30 + done_task / 8] &= (uint8_t)~m;
         if (run) run[done_task / 8] &= (uint8_t)~m;
     }
+    spu_task_lifecycle_trace("return-after", image, UINT32_MAX, taskset_ea, done_task, ls, ts);
     for (uint32_t t = 0; t < 128 && run; t++) {
         uint8_t m = (uint8_t)(0x80u >> (t & 7));
         if (!(ts[0x30 + t / 8] & m) || (run[t / 8] & m)) continue;
@@ -769,7 +774,7 @@ static void spu_async_run(spu_async_job* j)
             fprintf(stderr, "[spu_workload] async image=%d RETURNED rc=%d "
                     "(job ran to completion, did not loop)\n", j->image_id, rc);
             spu_serial_release();
-            if (j->taskset_ea) spu_taskset_task_exited(j->taskset_ea, j->taskid);
+            if (j->taskset_ea) spu_taskset_task_exited(j->taskset_ea, j->taskid, j->image_id, ls);
         }
         /* Persistent LS is retained in its taskset slot for the next task; a
          * per-dispatch LS is freed. */
