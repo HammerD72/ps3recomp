@@ -25,9 +25,10 @@ void spu_lockline_unlock(void) {}
 void spu_coh_notify_write(uint32_t a) { (void)a; }
 extern uint32_t g_ydkj_real_taskset_ea;
 static unsigned dispatches;
+static size_t image_extent = 64;
 size_t spu_elf_image_size(const uint8_t *p, size_t n) {
     if (p != vm_base + 0x20000 || n < 64) abort();
-    return 64;
+    return image_extent;
 }
 int spu_workload_dispatch_async(const uint8_t *p, uint32_t n, uint32_t a
 #ifdef SPURS_DISPATCH_HAS_OVERRIDE
@@ -54,9 +55,11 @@ int spu_workload_dispatch_task(const uint8_t *p, uint32_t n, uint32_t a,
 }
 
 #ifdef SPU_TASK_LIFECYCLE_H
+static spu_task_owner dispatched_owner;
 int spu_workload_dispatch_owned(const uint8_t* p, uint32_t n, uint32_t a,
                                 const uint32_t* arg, const spu_task_owner* owner) {
     if (!owner || !owner->generation || !owner->dispatch) abort();
+    dispatched_owner = *owner;
     return spu_workload_dispatch_task(p, n, a, arg, owner->taskset_ea, owner->taskid);
 }
 #endif
@@ -104,6 +107,23 @@ int main(void) {
         cellSpursShutdownTaskset(NULL) != CELL_SPURS_TASK_ERROR_NULL_POINTER ||
         cellSpursCreateTask(NULL, NULL, NULL, NULL, 0, 0, 0) != CELL_SPURS_TASK_ERROR_NULL_POINTER)
         failures++;
+#ifdef SPU_TASK_LIFECYCLE_H
+    spu_task_lifecycle_lock();
+    if (!spu_task_cancel_locked(&dispatched_owner, vm_base + TS)) abort();
+    spu_task_lifecycle_unlock();
+    prepare(expected); image_extent = 0;
+    rc = cellSpursCreateTask(handle, (CellSpursTaskId *)(uintptr_t)0x4000,
+                            (void *)(uintptr_t)0x20000, NULL, 0, 0, 0);
+    spu_task_lifecycle_lock();
+    spu_task_owner retry;
+    int released = spu_task_claim_locked(TS, vm_base + TS, 1, &retry);
+    if (released) spu_task_cancel_locked(&retry, vm_base + TS);
+    spu_task_lifecycle_unlock();
+    if (rc != CELL_OK || !released || dispatches != 1) {
+        fprintf(stderr, "FAIL InitialDispatchCancel: unavailable ELF keeps execution claim\n");
+        failures++;
+    } else printf("PASS InitialDispatchCancel: unavailable ELF is ready for retry\n");
+#endif
 #ifdef _WIN32
     _aligned_free(vm_base);
 #else

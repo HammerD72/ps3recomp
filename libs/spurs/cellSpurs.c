@@ -1010,6 +1010,7 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
              * suits create+join task patterns; a workload/taskset whose SPU job
              * waits on concurrent PPU-side signals will want the async lv2
              * SPU-thread path instead — wired when a title exercises it. */
+            int launched = 0;
             if (elf) {
                 /* elf/context are guest effective addresses; translate the image
                  * pointer to host memory for fingerprint+load, but keep context
@@ -1019,12 +1020,13 @@ s32 cellSpursCreateTask(CellSpursTaskset* taskset, CellSpursTaskId* taskId,
                 if (sz)
                     /* Async: SPURS tasks are persistent workers — running them
                      * inline would block this PPU thread forever (deadlock). */
-                    if (!spu_workload_dispatch_owned(host_elf, (uint32_t)sz,
-                                               (uint32_t)(uintptr_t)context, NULL, &owner)) {
-                        spu_task_lifecycle_lock();
-                        spu_task_cancel_locked(&owner, (uint8_t*)taskset);
-                        spu_task_lifecycle_unlock();
-                    }
+                    launched = spu_workload_dispatch_owned(host_elf, (uint32_t)sz,
+                                               (uint32_t)(uintptr_t)context, NULL, &owner);
+            }
+            if (!launched) {
+                spu_task_lifecycle_lock();
+                spu_task_cancel_locked(&owner, (uint8_t*)taskset);
+                spu_task_lifecycle_unlock();
             }
             return CELL_OK;
         }
