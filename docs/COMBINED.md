@@ -76,7 +76,13 @@ at that exact head. These tests contain no game inputs.
 
 The selectively ported native game trial removed the observed nonzero writes in
 a bounded slot watch and restored contiguous descriptors, but still waited for
-an unfinished PVS producer and regressed a previously visible background to
-black. It is not native acceptance and remains off the game's main branch.
+an unfinished PVS producer. Its first watched native run showed black instead
+of the background; two subsequent unwatched runs on the same native executable
+restored the desert, with artifacts and no bike/race. This is a run-dependent
+observation, not a consistently reproduced ABI regression or proof of debugger
+causality. A suspended read-only capture mapped the outstanding producer to a
+unique idle MFC engine with all tags complete and no list stall, narrowing the
+next investigation to guest progress. No full-game acceptance follows, and the
+selective trial remains off the game's main branch.
 The merged fork runtime as a whole has not been substituted into the native game.
 Keep the atomic branches for later review; no upstream PR has been opened.
