@@ -62,3 +62,21 @@ MotorStorm run was performed with this merged fork, no speedup was measured,
 and no bike/menu/race acceptance follows. FFmpeg decoding was not enabled in
 the local CTest configuration. Keep source/API admission, runtime semantics,
 native visuals and gameplay acceptance separate when selecting changes.
+
+## Policy argument and observer trial
+
+Combined head `e113b2a0c70eca07fb243b22dda6aa560c0bf535` merges atomic branches
+`codex/native-data-watch` (`1b84c93`) and `codex/spurs-policy-u64` (`680f097`).
+The former is a generic Win64 owned-process hardware write observer with authored
+write/new-thread/dump/detach/deadline regressions; see NATIVE_DATA_WATCH.md. The
+latter preserves scalar-u64 high/low argument halves instead of duplicating the
+low half. Its actual-store authored fixture fails three cases before and passes
+five after. Local Release build/CTest passed 7/7. All four hosted workflows passed
+at that exact head. These tests contain no game inputs.
+
+The selectively ported native game trial removed the observed nonzero writes in
+a bounded slot watch and restored contiguous descriptors, but still waited for
+an unfinished PVS producer and regressed a previously visible background to
+black. It is not native acceptance and remains off the game's main branch.
+The merged fork runtime as a whole has not been substituted into the native game.
+Keep the atomic branches for later review; no upstream PR has been opened.
