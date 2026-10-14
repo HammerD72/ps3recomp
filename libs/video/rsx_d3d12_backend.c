@@ -212,6 +212,7 @@ typedef struct {
                              * stale compile forever. */
     u32 cmask;              /* colour write mask (PSO key) */
     u32 cull;               /* packed face culling (PSO key) */
+    u64 alias_key;          /* typed render-target sampling and remap identity */
     u32 cube_mask;          /* which units are cube textures (PSO key): the HLSL
                              * declares those samplers as TextureCube, so a cube
                              * and a 2D variant of the same program are different
@@ -1726,6 +1727,7 @@ static void compile_vp(void)
  * hardcoded pixel shaders for draws whose FP we can translate -- e.g.
  * gcm/cube's plasma FP `c = tex2D(t0, uv).x; out = (c, 0, c, 1)`. */
 #include "rsx_fp_decompiler.h"
+#include "rsx_texture_alias.h"
 
 /* Hash + compile the CURRENT rsx_state vertex program into the VS cache;
  * returns the cache slot (or -1). Called at draw-record time so each draw
@@ -1973,8 +1975,18 @@ static u32 dr_cube_mask(const D3D12DrawRecord* dr)
 
 static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, int nrt,
                                           DXGI_FORMAT rtfmt, int exp32, u32 cmask, u32 cull,
-                                          u32 cube_mask)
+                                          u32 cube_mask, const D3D12DrawRecord* dr)
 {
+    u32 alias_mask = 0, alias_remap[16] = {0};
+    for (unsigned u = 0; u < sizeof dr->tex / sizeof dr->tex[0]; ++u) {
+        int rt = dr->tex_rt[u];
+        if (dr->tex[u].set && !(cube_mask & (1u << u)) && rt >= 0 &&
+            rsx_texture_alias_xy16(dr->tex[u].fmt,
+                s_d3d.off_rt[rt].dxgi == DXGI_FORMAT_R8G8B8A8_UNORM)) {
+            alias_mask |= 1u << u; alias_remap[u] = dr->tex[u].ctrl1;
+        }
+    }
+    u64 alias_key = rsx_texture_alias_key(alias_mask, alias_remap, 1u);
     if (nrt < 1) nrt = 1; if (nrt > 4) nrt = 4;
     if (rtfmt == 0) rtfmt = DXGI_FORMAT_R8G8B8A8_UNORM;
     extern uint8_t* vm_base;
@@ -2023,7 +2035,8 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
             s_d3d.vp_fp[i].rtfmt == (u32)rtfmt && s_d3d.vp_fp[i].exp32 == exp32 &&
             s_d3d.vp_fp[i].ucode_hash == uhash && s_d3d.vp_fp[i].cmask == cmask &&
             s_d3d.vp_fp[i].cull == cull &&
-            s_d3d.vp_fp[i].cube_mask == cube_mask)
+            s_d3d.vp_fp[i].cube_mask == cube_mask &&
+            s_d3d.vp_fp[i].alias_key == alias_key)
             return s_d3d.vp_fp[i].pso;
     s_perf_pso_miss++;      /* falls through to a full decompile + D3DCompile */
     /* PSOMISSDBG=1: on a miss, name the key field that differs from an existing
@@ -2270,6 +2283,10 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
         char* rp = strstr(hlsl, "return r[0];");
         if (rp) memcpy(rp, "return float4(1,0,1,1)", 23);
     }
+    if (rsx_texture_alias_apply(hlsl, sizeof hlsl, alias_mask, alias_remap, cube_mask, 1u) < 0) {
+        fprintf(stderr, "[RSX] XY16F render-target alias translation failed\n");
+        abort();
+    }
     ID3DBlob* pb = NULL; ID3DBlob* e = NULL;
     HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "guest_fp", NULL, NULL,
                             "main", "ps_5_0", 0, 0, &pb, &e);
@@ -2387,6 +2404,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     s_d3d.vp_fp[s_d3d.vp_fp_n].cmask   = cmask;
     s_d3d.vp_fp[s_d3d.vp_fp_n].cull    = cull;
     s_d3d.vp_fp[s_d3d.vp_fp_n].cube_mask = cube_mask;
+    s_d3d.vp_fp[s_d3d.vp_fp_n].alias_key = alias_key;
     s_d3d.vp_fp[s_d3d.vp_fp_n].pso     = pso;
     s_d3d.vp_fp_n++;
     return pso;
@@ -4261,7 +4279,7 @@ static void render_frame(void)
                                        dr_num_rts(dr),
                                        dr->rt_off ? rsx_surface_dxgi(dr->rt_fmt)
                                                   : DXGI_FORMAT_R8G8B8A8_UNORM,
-                                       dr->fp_exp32, dr->cmask, dr->cull, dr_cube_mask(dr));
+                                       dr->fp_exp32, dr->cmask, dr->cull, dr_cube_mask(dr), dr);
         if (perf_on()) s_perf_pso += perf_now() - _ps0;
     }
 
@@ -4588,7 +4606,7 @@ static void render_frame(void)
                                                 dr->rt_off ? rsx_surface_dxgi(dr->rt_fmt)
                                                            : DXGI_FORMAT_R8G8B8A8_UNORM,
                                                 dr->fp_exp32, dr->cmask, dr->cull,
-                                                dr_cube_mask(dr)) : NULL;
+                                                dr_cube_mask(dr), dr) : NULL;
                 s_d3d.cmd_list->lpVtbl->SetPipelineState(s_d3d.cmd_list,
                                                          dpso ? dpso : vpso);
                 /* Per-draw viewport: the guest rect when sane, else the

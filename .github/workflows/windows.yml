@@ -172,6 +172,9 @@ jobs:
           .\test_rsx_primitives.exe
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
+      - name: Packed XY16F render-target sampling (WARP)
+        run: python tests/check_rsx_texture_alias.py
+
       - name: Run condition semantics regressions
         run: |
           cmake -S tests/sync_stress -B build-sync -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
