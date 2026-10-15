@@ -6,6 +6,9 @@
 #include <d3d12.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef NDEBUG
+#undef NDEBUG /* Fixture checks and their calls must also execute in Release. */
+#endif
 #include <assert.h>
 #include <string.h>
 #include <stdint.h>
