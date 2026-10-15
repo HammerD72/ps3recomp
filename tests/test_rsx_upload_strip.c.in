@@ -1,0 +1,55 @@
+/* The function below is extracted verbatim from the production backend at
+ * configure time. Only storage/vertex-fetch/GPU-retirement adapters are authored. */
+#include "rsx_commands.h"
+#include "rsx_upload_buffer.h"
+#include <stdlib.h>
+#include <stdio.h>
+#define MAX_VERTICES 8u
+#define VP_VERT_STRIDE 256u
+typedef struct { float v[4]; } VPSlot;
+static struct { void* vp_vb_mapped; u32 vp_vb_offset, vp_parity, vp_capacity; } s_d3d;
+static unsigned char guest;
+uint8_t* vm_base = &guest;
+static int retired;
+static int allocate(void* c, uint64_t bytes, rsx_upload_buffer* b)
+{ (void)c; b->memory = malloc((size_t)bytes); b->resource = b->memory; return b->memory != NULL; }
+static int retire(void* c) { (void)c; ++retired; return 1; }
+static void dispose(void* c, rsx_upload_buffer* b) { (void)c; free(b->memory); }
+static void vp_upload_reserve(u64 vertices)
+{
+    rsx_upload_buffer b = {s_d3d.vp_vb_mapped, s_d3d.vp_vb_mapped, s_d3d.vp_capacity};
+    const rsx_upload_ops ops = {NULL, allocate, retire, dispose};
+    if (!rsx_upload_reserve(&b, s_d3d.vp_vb_offset, vertices, VP_VERT_STRIDE, &ops)) abort();
+    s_d3d.vp_vb_mapped = b.memory; s_d3d.vp_capacity = b.capacity;
+}
+static void read_vp_vertex(const rsx_state* state, u32 index, VPSlot* out)
+{ (void)state; memset(out, 0, 16 * sizeof(*out)); out[0].v[0] = (float)index; out[0].v[3] = 1; }
+@UPLOAD_STRIP_FUNCTION@
+#define CHECK(x) do { if (!(x)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #x); return 1; } } while (0)
+int main(void)
+{
+    rsx_state state; memset(&state, 0, sizeof(state)); state.vertex_attribs[0].enabled = 1;
+    s_d3d.vp_capacity = MAX_VERTICES;
+    s_d3d.vp_vb_mapped = malloc(2 * MAX_VERTICES * VP_VERT_STRIDE);
+    CHECK(s_d3d.vp_vb_mapped);
+    memset(s_d3d.vp_vb_mapped, 0x17, MAX_VERTICES * VP_VERT_STRIDE);
+    memset((unsigned char*)s_d3d.vp_vb_mapped + MAX_VERTICES * VP_VERT_STRIDE, 0x62, MAX_VERTICES * VP_VERT_STRIDE);
+    s_d3d.vp_vb_offset = MAX_VERTICES * VP_VERT_STRIDE;
+    CHECK(upload_strip_vp(&state, 0, 4, 0) == 6);
+    CHECK(retired == 1 && s_d3d.vp_capacity == 16);
+    for (size_t i = 0; i < MAX_VERTICES * VP_VERT_STRIDE; ++i) {
+        CHECK(((unsigned char*)s_d3d.vp_vb_mapped)[i] == 0x17);
+        CHECK(((unsigned char*)s_d3d.vp_vb_mapped)[16 * VP_VERT_STRIDE + i] == 0x62);
+    }
+    const unsigned expected[6] = {0,1,2,1,3,2};
+    VPSlot* out = (VPSlot*)((unsigned char*)s_d3d.vp_vb_mapped + MAX_VERTICES * VP_VERT_STRIDE);
+    for (unsigned i = 0; i < 6; ++i) CHECK(out[i * 16].v[0] == (float)expected[i]);
+    s_d3d.vp_parity = 1; s_d3d.vp_vb_offset = 16 * VP_VERT_STRIDE;
+    CHECK(upload_strip_vp(&state, 4, 4, 1) == 6);
+    CHECK(retired == 2 && s_d3d.vp_capacity == 32);
+    out = (VPSlot*)((unsigned char*)s_d3d.vp_vb_mapped + MAX_VERTICES * VP_VERT_STRIDE);
+    for (unsigned i = 0; i < 6; ++i) CHECK(out[i * 16].v[0] == (float)expected[i]);
+    free(s_d3d.vp_vb_mapped);
+    puts("PASS: production strip upload survives full capacity and parity relocation");
+    return 0;
+}

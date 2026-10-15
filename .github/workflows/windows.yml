@@ -59,8 +59,8 @@ jobs:
       - name: Memory allocation and FIFO trace regressions
         run: |
           cmake -S . -B build -DPS3RECOMP_BUILD_TESTS=ON
-          cmake --build build --target test_memory_container test_gcm_draw_trace
-          ctest --test-dir build -R "^(memory_container_allocation|gcm_draw_trace)$" --output-on-failure
+          cmake --build build --target test_memory_container test_gcm_draw_trace test_rsx_upload_buffer test_rsx_upload_strip
+          ctest --test-dir build -R "^(memory_container_allocation|gcm_draw_trace|rsx_upload_buffer|rsx_upload_strip)$" --output-on-failure
 
       - name: Verify the library exists
         shell: bash
