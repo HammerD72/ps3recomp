@@ -570,6 +570,8 @@ if(PS3RECOMP_BUILD_TESTS OR BUILD_TESTING)
         COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:test_gcm_draw_trace>"
                 "-DWORK=${CMAKE_CURRENT_BINARY_DIR}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_gcm_draw_trace.cmake.in")
+    add_executable(test_rsx_record_batch tests/test_rsx_record_batch.c)
+    add_test(NAME rsx_record_batch COMMAND test_rsx_record_batch)
     add_executable(test_rsx_upload_buffer tests/test_rsx_upload_buffer.c)
     add_test(NAME rsx_upload_buffer COMMAND test_rsx_upload_buffer)
     file(READ "${CMAKE_CURRENT_SOURCE_DIR}/libs/video/rsx_d3d12_backend.c" RSX_UPLOAD_SOURCE)
