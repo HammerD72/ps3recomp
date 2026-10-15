@@ -97,6 +97,7 @@ typedef struct {
         u32 off;        /* resolved vm offset (guest upload source), 0 = none */
         u32 raw;        /* raw RSX offset (offscreen-RT matching) */
         u32 w, h, fmt;  /* dims + RSX base format */
+        u32 address, border; /* Immutable guest sampler addressing. */
         u32 ctrl1;      /* NV4097 TEXTURE_CONTROL1: component remap crossbar */
         u32 mips;       /* SET_TEXTURE_FORMAT bits 16..31: mipmap level count.
                          * Cube faces sit one whole mip pyramid apart, so this
@@ -219,6 +220,7 @@ typedef struct {
                              * declares those samplers as TextureCube, so a cube
                              * and a 2D variant of the same program are different
                              * pipelines and must not share a cache entry. */
+    u32 sampler_mask;
     ID3D12PipelineState* pso;
 } VPFPEntry;
 /* Guest-FP PSO cache. 16 entries thrashed badly: this title needs far more
@@ -1137,7 +1139,7 @@ static int init_d3d12(u32 width, u32 height)
         srv_range.BaseShaderRegister = 0;
         srv_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-        D3D12_ROOT_PARAMETER rp[3] = {0};
+        D3D12_ROOT_PARAMETER rp[4] = {0};
         rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;   /* b0 = vp_c bank */
         rp[0].Descriptor.ShaderRegister = 0;
         rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
@@ -1149,22 +1151,18 @@ static int init_d3d12(u32 width, u32 height)
         rp[2].Descriptor.ShaderRegister = 1;
         rp[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-        D3D12_STATIC_SAMPLER_DESC samp[4] = {0};
-        for (int _s = 0; _s < 4; _s++) {
-            samp[_s].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-            samp[_s].AddressU = samp[_s].AddressV = samp[_s].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-            samp[_s].ShaderRegister = (UINT)_s;
-            samp[_s].MaxLOD = D3D12_FLOAT32_MAX;
-            samp[_s].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-        }
-        /* s0 keeps point/clamp: the dbgfont atlas PS samples glyph cells and
-         * linear filtering bleeds neighbouring glyphs. */
-        samp[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
-        samp[0].AddressU = samp[0].AddressV = samp[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        D3D12_DESCRIPTOR_RANGE sampler_range = {0};
+        sampler_range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
+        sampler_range.NumDescriptors = 16;
+        sampler_range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        rp[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rp[3].DescriptorTable.NumDescriptorRanges = 1;
+        rp[3].DescriptorTable.pDescriptorRanges = &sampler_range;
+        rp[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_ROOT_SIGNATURE_DESC rd = {0};
-        rd.NumParameters = 3; rd.pParameters = rp;
-        rd.NumStaticSamplers = 4; rd.pStaticSamplers = samp;
+        rd.NumParameters = 4; rd.pParameters = rp;
+        rd.NumStaticSamplers = 0; rd.pStaticSamplers = NULL;
         rd.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
         ID3DBlob* sig = NULL; ID3DBlob* err = NULL;
@@ -1303,6 +1301,8 @@ static int vp_upload_retire(void* context)
         s_d3d.fence->lpVtbl->GetCompletedValue(s_d3d.fence) >=
         s_d3d.fence_values[s_d3d.frame_index];
 }
+#include "rsx_address_tables.h"
+
 static void vp_upload_dispose(void* context, rsx_upload_buffer* b)
 {
     (void)context;
@@ -2471,6 +2471,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     s_d3d.vp_fp[s_d3d.vp_fp_n].cull    = cull;
     s_d3d.vp_fp[s_d3d.vp_fp_n].cube_mask = cube_mask;
     s_d3d.vp_fp[s_d3d.vp_fp_n].alias_key = alias_key;
+    s_d3d.vp_fp[s_d3d.vp_fp_n].sampler_mask = rsx_address_sampler_mask(hlsl);
     s_d3d.vp_fp[s_d3d.vp_fp_n].pso     = pso;
     s_d3d.vp_fp_n++;
     return pso;
@@ -3142,8 +3143,9 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
 /* Snapshot the VP constant bank + viewport epilogue for one draw into its
  * vp_cb slot. Runs at record time so every draw keeps the constants that
  * were live when the guest issued it. */
-static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
+static void vp_record_cb(u32 slot, int vs_idx, D3D12DrawRecord* dr)
 {
+    address_record(dr);
     scene_timeline_record(slot);
     const rsx_state* st = s_d3d.current_rsx_state;
     if (!s_d3d.vp_cb_mapped || !st || slot >= MAX_DRAWS) return;
@@ -3887,7 +3889,7 @@ static void render_frame(void)
      * (gcm/cube: triangles mixing stale and new vertices -> missing/sliver
      * polygons). These workloads are a few draws/frame, so full serialisation
      * costs little. */
-    wait_for_gpu();
+    address_retire();
 
     /* Compile the real vertex program once its microcode is captured, and keep
      * the constant bank uploaded for the VS. */
@@ -4723,6 +4725,7 @@ static void render_frame(void)
                 }
                 D3D12_GPU_DESCRIPTOR_HANDLE gh = gh_base;
                 gh.ptr += (u64)(DRAW_SRV_BASE + d * 4) * s_d3d.srv_inc;
+                address_bind(dr, dpso ? dpso : vpso);
                 s_d3d.cmd_list->lpVtbl->SetGraphicsRootDescriptorTable(s_d3d.cmd_list, 1, gh);
                 /* Per-draw constants: this draw's vp_cb + FP texscale slots. */
                 s_d3d.cmd_list->lpVtbl->SetGraphicsRootConstantBufferView(s_d3d.cmd_list, 0,
