@@ -1,0 +1,26 @@
+# Exercise the real optional writer, including rejection/error metadata.
+if(NOT DEFINED PROGRAM OR NOT DEFINED WORK)
+    message(FATAL_ERROR "PROGRAM and WORK are required")
+endif()
+set(gate "${WORK}/gcm-draw-fixture.arm")
+file(WRITE "${gate}" "authored fixture gate\n")
+execute_process(COMMAND "${PROGRAM}" "${gate}"
+    RESULT_VARIABLE status OUTPUT_VARIABLE trace ERROR_VARIABLE errors TIMEOUT 10)
+file(REMOVE "${gate}")
+if(NOT status EQUAL 0)
+    message(FATAL_ERROR "Open-gate fixture failed: ${status}: ${errors}")
+endif()
+string(REGEX MATCHALL "\\[GCM_DRAW\\]" records "${trace}")
+list(LENGTH records count)
+if(NOT count EQUAL 2 OR
+   NOT trace MATCHES "method=1818 data=3F800000 result=-1" OR
+   NOT trace MATCHES "method=1814 data=03000000 result=0" OR
+   NOT trace MATCHES "rt=00010000,00000000,00000000,00000000 target=1 fp=00123400 primitive=5 active=1")
+    message(FATAL_ERROR "Selected decoder results/state were lost: ${trace}")
+endif()
+execute_process(COMMAND "${PROGRAM}" "${gate}"
+    RESULT_VARIABLE status OUTPUT_VARIABLE trace ERROR_VARIABLE errors TIMEOUT 10)
+if(NOT status EQUAL 0 OR NOT trace STREQUAL "" OR NOT errors STREQUAL "")
+    message(FATAL_ERROR "Closed-gate fixture should be silent: ${status}: ${trace} ${errors}")
+endif()
+message(STATUS "PASS: accepted/rejected metadata preserved; closed gate silent")
