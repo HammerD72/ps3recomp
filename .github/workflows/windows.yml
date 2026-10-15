@@ -56,11 +56,11 @@ jobs:
       - name: Build
         run: cmake --build build
 
-      - name: Container allocation syscall regression
+      - name: Memory allocation and FIFO trace regressions
         run: |
           cmake -S . -B build -DPS3RECOMP_BUILD_TESTS=ON
-          cmake --build build --target test_memory_container
-          ctest --test-dir build -R "^memory_container_allocation$" --output-on-failure
+          cmake --build build --target test_memory_container test_gcm_draw_trace
+          ctest --test-dir build -R "^(memory_container_allocation|gcm_draw_trace)$" --output-on-failure
 
       - name: Verify the library exists
         shell: bash

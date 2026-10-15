@@ -15,6 +15,7 @@
 #include "../../runtime/ppu/ppu_memory.h"   /* vm_write32 (translate + byte-swap, OOB-safe) */
 #include "../../runtime/memory/vm.h"    /* VM_HLE_INJECT_BASE */
 #include "rsx_commands.h"                    /* rsx_state, rsx_process_command_buffer */
+#include "gcm_draw_trace.h"
 #include "../../include/ps3emu/guest_call.h" /* g_ps3_guest_caller for direct handler dispatch */
 
 /* Guest EA of the GCM context (begin/end/current/callback) the title writes its
@@ -1927,7 +1928,9 @@ static void gcm_rsx_process_fifo_unlocked(void)
                 } else if (mfull == 0xE920u || mfull == 0xE924u) {
                     cellGcmSetFlipCommand(vm_read32(dea) & 7u);
                 } else if (subch == 0 || (subch == 1 && !s1_2d)) {
-                    rsx_process_method(&s_state, m, vm_read32(dea));
+                    { const u32 data = vm_read32(dea);
+                      const int result = rsx_process_method(&s_state, m, data);
+                      gcm_draw_trace(s_fifo_getoff + 4 + i * 4, subch, m, data, result, &s_state); }
                     /* NV406E_SET_REFERENCE: queue the fence value for PACED
                      * publication (gcm_ref_publish below) instead of letting a
                      * later fence in the same batch overwrite it. */

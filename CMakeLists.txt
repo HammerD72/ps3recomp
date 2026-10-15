@@ -561,6 +561,15 @@ message(STATUS "")
 # Authored device pixels exercise actual HLE accessors and row conversion.
 if(PS3RECOMP_BUILD_TESTS OR BUILD_TESTING)
     enable_testing()
+    add_executable(test_gcm_draw_trace tests/test_gcm_draw_trace.c)
+    target_include_directories(test_gcm_draw_trace PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    if(MSVC)
+        target_compile_definitions(test_gcm_draw_trace PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+    add_test(NAME gcm_draw_trace
+        COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:test_gcm_draw_trace>"
+                "-DWORK=${CMAKE_CURRENT_BINARY_DIR}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_gcm_draw_trace.cmake")
     add_executable(test_memory_container tests/test_memory_container.c)
     if(NOT WIN32)
         find_package(Threads REQUIRED)
