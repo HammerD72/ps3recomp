@@ -1467,6 +1467,8 @@ static void cap_write_bmp(const char* path, const void* mapped, u32 w, u32 h,
     fclose(f);
 }
 
+#include "rsx_scene_timeline.h"
+
 /* Copy one GPU resource into a fresh readback buffer and write it as a BMP.
  * Self-contained: waits, resets the frame command list, copies, executes,
  * waits, maps. `prior` is the resource's current tracked state (restored after
@@ -3142,6 +3144,7 @@ static int vp_upload_tex_slot(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips
  * were live when the guest issued it. */
 static void vp_record_cb(u32 slot, int vs_idx, const D3D12DrawRecord* dr)
 {
+    scene_timeline_record(slot);
     const rsx_state* st = s_d3d.current_rsx_state;
     if (!s_d3d.vp_cb_mapped || !st || slot >= MAX_DRAWS) return;
     /* FP texcoord scale (b1): 1/size for UNnormalized textures (fmt bit
@@ -4546,7 +4549,9 @@ static void render_frame(void)
             int cur_m[3] = {-1, -1, -1};           /* MRT B/C/D: -1 = unbound   */
             double _rec0 = perf_on() ? perf_now() : 0.0;
             int seen_small_vp = 0, captured = 0;
+            scene_timeline_begin();
             for (u32 d = 0; d < s_d3d.draw_count && d < MAX_DRAWS; d++) {
+                scene_timeline_before_op(d);
                 const D3D12DrawRecord* dr = &s_d3d.draws[d];
                 if (!dr->is_vp) continue;
                 /* The reduced-viewport passes (this title's reflection, drawn
@@ -5038,6 +5043,7 @@ skip_dump_consider: ;
     ID3D12CommandList* cmd_lists[] = {(ID3D12CommandList*)s_d3d.cmd_list};
     s_d3d.cmd_queue->lpVtbl->ExecuteCommandLists(s_d3d.cmd_queue, 1, cmd_lists);
     s_cpu_surface_recording=0;
+    scene_timeline_finish();
 
     /* D3D12_IQ=1: drain the debug layer's message queue after submitting the
      * frame. The legacy (is_vp=0) DrawInstanced path silently produced ZERO
@@ -6519,6 +6525,7 @@ static void d3d12_draw_indexed(void* ud, u32 primitive, u32 first, u32 count)
 
 static void d3d12_bind_texture(void* ud, u32 unit, const rsx_texture_state* tex)
 {
+    scene_timeline_bind(unit, tex);
     (void)ud;
     extern uint8_t* vm_base;
     extern u32 cellGcmResolveOffset(u32);
