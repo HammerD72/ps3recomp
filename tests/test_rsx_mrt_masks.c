@@ -10,6 +10,21 @@ void ps3_ms(const char* key) { (void)key; abort(); }
 int main(void) {
  rsx_state s; rsx_state_init(&s);
  CHECK(s.color_mask_mrt==0);
+ CHECK(s.blend_enable_mrt==0 && rsx_mrt_blend_enables(s.blend_enable,s.blend_enable_mrt)==0);
+ s.blend_dirty=0;
+ CHECK(rsx_process_method(&s,NV4097_SET_BLEND_ENABLE_MRT,0xE)==0);
+ CHECK(s.blend_enable_mrt==0xE && s.blend_dirty);
+ CHECK(rsx_mrt_blend_enables(0,s.blend_enable_mrt)==14);
+ CHECK(rsx_mrt_blend_enables(1,s.blend_enable_mrt)==15);
+ CHECK(rsx_process_method(&s,NV4097_SET_BLEND_ENABLE_MRT,0)==0);
+ for(unsigned e=0;e<16;e++) {
+   unsigned k=rsx_mrt_blend_key_bits(e);
+   CHECK(k==((e&1)|((e&14)<<26)));
+   CHECK(rsx_mrt_blend_key_enables(k|0x07FFFFFE)==e);
+ }
+ CHECK(rsx_mrt_blend_key_bits(2)==0x08000000);
+ CHECK(rsx_mrt_blend_key_bits(8)==0x20000000);
+
  CHECK(rsx_mrt_color_masks(s.color_mask,s.color_mask_mrt)==15);
  s.color_mask_dirty=0;
  CHECK(rsx_process_method(&s,NV4097_SET_COLOR_MASK_MRT,0xFFF0)==0);

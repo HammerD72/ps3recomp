@@ -12,9 +12,8 @@ The secondary mask resets to zero. Primary reset behavior is unchanged.
 The command processor retains the raw word. All three VP record paths copy
 packed masks; both contiguous-merge paths require equality. Existing positive
 and negative PSO identities compare the complete packed value. D3D12 enables
-independent target state and sets each write mask separately. Blend factors
-and enables retain their prior caller behavior; secondary blend decoding is
-not part of this correction. Other backends are unchanged.
+independent target state and sets each write mask separately. Blend factors remain shared; per-target enables are retained independently
+by the follow-up described below. Other backends are unchanged.
 
 The actual-command CPU fixture checks reset, method acceptance, dirty state,
 zero/full masks and all ARGB roles on outputs1..3. Unexpected guest-memory or
@@ -32,3 +31,22 @@ closed. Unseen zero storage is not an observed zero. It does not infer register
 semantics or change rendering. When analyzing a trace, distinguish control
 writes from active draw commands; retained program/target bindings on a control
 write do not prove that a draw used the new value. Captured logs remain private.
+
+
+## Independent blend enables
+
+SET_BLEND_ENABLE_MRT (byte method0x036C) stores secondary enables in bits1..3;
+reset is zero, independently of primary SET_BLEND_ENABLE. The raw observer's
+unseen flag must not be described as an observed zero write. Register reset
+semantics come from the pinned reference source above, separately from trace
+observations. The command processor now retains the raw word and marks blend
+state dirty.
+
+The VP pipeline key keeps primary enable in bit0, common factors/equations in
+bits1..26, and secondary enables in bits27..29. Both record-merge paths compare
+the full key. PSO construction supplies common factors when any target blends,
+including a secondary-only configuration, then assigns each target's enable.
+An authored additive GPU extension covers enable masks1,2,3,5,A,F,0 on four
+outputs. Copying primary enable to every target fails five cases; all-on and
+all-off controls pass. Correct per-target enables pass all seven. This does
+not establish native motion, material or race acceptance.

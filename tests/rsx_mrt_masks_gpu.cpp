@@ -27,10 +27,11 @@ static ComPtr<ID3DBlob> compile(const char *source, const char *profile) {
   return code;
 }
 int main(int argc, char **argv) {
-  bool old=false,hardware=false;
+  bool old=false,hardware=false,blend_policy=false;
   for(int i=1;i<argc;i++) {
     if(!strcmp(argv[i],"--unpatched"))old=true;
     else if(!strcmp(argv[i],"--hardware"))hardware=true;
+    else if(!strcmp(argv[i],"--blend-policy"))blend_policy=true;
     else return 2;
   }
   ComPtr<IDXGIFactory4> factory;
@@ -118,13 +119,22 @@ int main(int argc, char **argv) {
   struct Case{unsigned masks,nrt;};Case cases[]={{0x000f,2},{0x00ff,2},{0x001f,2},{0x008f,2},{0x00f0,2},{0x8421,4},{0,4}};
   const float clear[]={.125f,.25f,.5f,1},draw[]={.75f,.5f,.25f,0};int failed=0;
   for(unsigned i=0;i<7;i++){
-    const auto c=cases[i];D3D12_GRAPHICS_PIPELINE_STATE_DESC pd={};
+    auto c=cases[i];const unsigned enable_cases[]={1,2,3,5,10,15,0};
+    unsigned enables=enable_cases[i];if(blend_policy){c.masks=0xFFFF;c.nrt=4;}D3D12_GRAPHICS_PIPELINE_STATE_DESC pd={};
     pd.pRootSignature=root.Get();pd.VS={vs->GetBufferPointer(),vs->GetBufferSize()};pd.PS={ps->GetBufferPointer(),ps->GetBufferSize()};
     pd.RasterizerState.FillMode=D3D12_FILL_MODE_SOLID;pd.RasterizerState.CullMode=D3D12_CULL_MODE_NONE;pd.RasterizerState.DepthClipEnable=TRUE;
     pd.SampleMask=~0u;pd.PrimitiveTopologyType=D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;pd.NumRenderTargets=c.nrt;pd.SampleDesc.Count=1;
     for(unsigned r=0;r<c.nrt;r++)pd.RTVFormats[r]=DXGI_FORMAT_R32G32B32A32_FLOAT;
     rsx_d3d12_write_masks(&pd.BlendState,c.nrt,c.masks);
-    if(old){pd.BlendState.IndependentBlendEnable=FALSE;for(unsigned r=0;r<c.nrt;r++)pd.BlendState.RenderTarget[r].RenderTargetWriteMask=(UINT8)(c.masks&15);}
+    if(blend_policy){
+      for(unsigned r=0;r<c.nrt;r++){
+        auto& b=pd.BlendState.RenderTarget[r];b.SrcBlend=b.DestBlend=b.SrcBlendAlpha=b.DestBlendAlpha=D3D12_BLEND_ONE;
+        b.BlendOp=b.BlendOpAlpha=D3D12_BLEND_OP_ADD;
+      }
+      rsx_d3d12_blend_enables(&pd.BlendState,c.nrt,enables);
+      if(old)for(unsigned r=0;r<c.nrt;r++)pd.BlendState.RenderTarget[r].BlendEnable=(enables&1)?TRUE:FALSE;
+    }
+    if(old&&!blend_policy){pd.BlendState.IndependentBlendEnable=FALSE;for(unsigned r=0;r<c.nrt;r++)pd.BlendState.RenderTarget[r].RenderTargetWriteMask=(UINT8)(c.masks&15);}
     ComPtr<ID3D12PipelineState> pso;check(device->CreateGraphicsPipelineState(&pd,IID_PPV_ARGS(&pso)),"PSO");
     for(unsigned r=0;r<4;r++)list->ClearRenderTargetView(rt[r],clear,0,nullptr);
     list->OMSetRenderTargets(c.nrt,rt,FALSE,nullptr);D3D12_VIEWPORT vp={0,0,1,1,0,1};D3D12_RECT rect={0,0,1,1};
@@ -142,7 +152,7 @@ int main(int argc, char **argv) {
     for(unsigned r=0;r<c.nrt;r++){
       float got[4];memcpy(got,(char*)mapped+r*256,sizeof got);
       for(unsigned k=0;k<4;k++){
-        float want=(c.masks&(1u<<(r*4+k)))?draw[k]:clear[k];
+        float want=blend_policy ? draw[k]+((enables&(1u<<r))?clear[k]:0) : ((c.masks&(1u<<(r*4+k)))?draw[k]:clear[k]);
         if(!std::isfinite(got[k])||fabs(got[k]-want)>1e-5){ok=false;printf("target %u channel %u got %.6f want %.6f\n",r,k,got[k],want);}
       }
     }
