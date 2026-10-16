@@ -15,8 +15,8 @@
 #ifdef _DEBUG
 #include <crtdbg.h>
 #endif
-typedef struct { struct { unsigned address, border_color; } textures[16]; } rsx_state;
-typedef struct { struct { unsigned address, border; int set; } tex[16]; unsigned fp_addr; } D3D12DrawRecord;
+typedef struct { struct { unsigned address, border_color, filter; } textures[16]; } rsx_state;
+typedef struct { struct { unsigned address, border, filter; int set; } tex[16]; unsigned fp_addr; } D3D12DrawRecord;
 typedef struct FakeHeap {
     ID3D12DescriptorHeap api;
     D3D12_SAMPLER_DESC descriptors[2048];
@@ -87,6 +87,10 @@ int main(int argc, char** argv)
     D3D12DrawRecord dr = {0}; dr.tex[1].set = 1;
     guest.textures[1].address = 0x40404; address_record(&dr);
     assert(address_record_matches(&dr));
+    guest.textures[1].filter = 0x01012000; assert(!address_record_matches(&dr));
+    address_record(&dr); assert(dr.tex[1].filter == 0x01012000 && address_record_matches(&dr));
+    guest.textures[1].filter = 0x02022000; assert(dr.tex[1].filter == 0x01012000 && !address_record_matches(&dr));
+    guest.textures[1].filter = 0x01012000;
     guest.textures[1].address = 0x30303; assert(!address_record_matches(&dr));
     guest.textures[1].address = 0x40404;
     assert(address_bind(&dr, pso));

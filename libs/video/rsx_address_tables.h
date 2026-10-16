@@ -34,6 +34,7 @@ static void address_record(D3D12DrawRecord* dr)
     for (unsigned u = 0; u < sizeof(dr->tex) / sizeof(dr->tex[0]); ++u) {
         dr->tex[u].address = st->textures[u].address;
         dr->tex[u].border = st->textures[u].border_color;
+        dr->tex[u].filter = st->textures[u].filter;
     }
 }
 static int address_record_matches(const D3D12DrawRecord* dr)
@@ -42,7 +43,8 @@ static int address_record_matches(const D3D12DrawRecord* dr)
     if (!st) return 0;
     for (unsigned u = 0; u < sizeof(dr->tex) / sizeof(dr->tex[0]); ++u)
         if (dr->tex[u].address != st->textures[u].address ||
-            dr->tex[u].border != st->textures[u].border_color) return 0;
+            dr->tex[u].border != st->textures[u].border_color ||
+            dr->tex[u].filter != st->textures[u].filter) return 0;
     return 1;
 }
 /* Returns true when changing heaps invalidated the caller's cached SRV table. */

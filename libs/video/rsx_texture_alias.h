@@ -1,7 +1,7 @@
 /* ps3recomp: sample guest XY16F words stored through an RGBA8 render target.
  * The guest A,R,G,B bytes are host texel lanes W,X,Y,Z. Decode each half
  * before filtering; filtering packed bytes first changes the represented value.
- * This adapter serves the backend's existing one-mip static sampler states.
+ * This adapter serves two one-mip sampler policies selected from guest state.
  */
 #ifndef PS3RECOMP_RSX_TEXTURE_ALIAS_H
 #define PS3RECOMP_RSX_TEXTURE_ALIAS_H
@@ -13,6 +13,25 @@
 static int rsx_texture_alias_xy16(unsigned texture_format, int rgba8_surface)
 {
     return rgba8_surface && (texture_format & 0x9fu) == 0x9fu;
+}
+
+/* The existing adapter implements these two one-mip policies. Choose from
+ * recorded state, never from the texture-unit number. Unsupported combinations
+ * remain explicit errors pending the complete sampler implementation. */
+static int rsx_texture_alias_guest_policy(unsigned mask, const unsigned address[16],
+    const unsigned filter[16], unsigned* point_clamp_mask)
+{
+    if (!address || !filter || !point_clamp_mask) return 0;
+    unsigned points = 0;
+    for (unsigned u = 0; u < 16; ++u) {
+        if (!(mask & (1u << u))) continue;
+        unsigned uv = address[u] & 0x0f0fu;
+        unsigned min = (filter[u] >> 16) & 15u, mag = (filter[u] >> 24) & 15u;
+        if (uv == 0x0303u && min == 1 && mag == 1) points |= 1u << u;
+        else if (uv != 0x0101u || min != 2 || mag != 2) return 0;
+    }
+    *point_clamp_mask = points;
+    return 1;
 }
 
 static unsigned long long rsx_texture_alias_key(unsigned mask,

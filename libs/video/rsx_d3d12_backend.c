@@ -97,7 +97,7 @@ typedef struct {
         u32 off;        /* resolved vm offset (guest upload source), 0 = none */
         u32 raw;        /* raw RSX offset (offscreen-RT matching) */
         u32 w, h, fmt;  /* dims + RSX base format */
-        u32 address, border; /* Immutable guest sampler addressing. */
+        u32 address, border, filter; /* Immutable guest sampler state. */
         u32 ctrl1;      /* NV4097 TEXTURE_CONTROL1: component remap crossbar */
         u32 mips;       /* SET_TEXTURE_FORMAT bits 16..31: mipmap level count.
                          * Cube faces sit one whole mip pyramid apart, so this
@@ -2044,15 +2044,23 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
                                           u32 cube_mask, const D3D12DrawRecord* dr)
 {
     u32 alias_mask = 0, alias_remap[16] = {0};
+    u32 alias_address[16] = {0}, alias_filter[16] = {0}, alias_points = 0;
     for (unsigned u = 0; u < sizeof dr->tex / sizeof dr->tex[0]; ++u) {
         int rt = dr->tex_rt[u];
         if (dr->tex[u].set && !(cube_mask & (1u << u)) && rt >= 0 &&
             rsx_texture_alias_xy16(dr->tex[u].fmt,
                 s_d3d.off_rt[rt].dxgi == DXGI_FORMAT_R8G8B8A8_UNORM)) {
             alias_mask |= 1u << u; alias_remap[u] = dr->tex[u].ctrl1;
+            alias_address[u] = dr->tex[u].address; alias_filter[u] = dr->tex[u].filter;
         }
     }
-    u64 alias_key = rsx_texture_alias_key(alias_mask, alias_remap, 1u);
+    if (!rsx_texture_alias_guest_policy(alias_mask, alias_address, alias_filter, &alias_points)) {
+        fprintf(stderr, "[RSXALIAS] Unsupported recorded sampling policy mask=%04X\n", alias_mask);
+        for (unsigned u = 0; u < 16; ++u) if (alias_mask & (1u << u))
+            fprintf(stderr, "[RSXALIAS] unit=%u address=%08X filter=%08X\n", u, alias_address[u], alias_filter[u]);
+        abort();
+    }
+    u64 alias_key = rsx_texture_alias_key(alias_mask, alias_remap, alias_points);
     if (nrt < 1) nrt = 1; if (nrt > 4) nrt = 4;
     if (rtfmt == 0) rtfmt = DXGI_FORMAT_R8G8B8A8_UNORM;
     extern uint8_t* vm_base;
@@ -2349,7 +2357,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
         char* rp = strstr(hlsl, "return r[0];");
         if (rp) memcpy(rp, "return float4(1,0,1,1)", 23);
     }
-    if (rsx_texture_alias_apply(hlsl, sizeof hlsl, alias_mask, alias_remap, cube_mask, 1u) < 0) {
+    if (rsx_texture_alias_apply(hlsl, sizeof hlsl, alias_mask, alias_remap, cube_mask, alias_points) < 0) {
         fprintf(stderr, "[RSX] XY16F render-target alias translation failed\n");
         abort();
     }

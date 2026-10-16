@@ -51,6 +51,8 @@ def main():
                   sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}, cases=[])
     for name, arguments, expected in [('unpatched', ['--unpatched'], 1),
                                       ('swapped-low-bytes', ['--swapped-low-bytes'], 1),
+                                      ('unit-policy', ['--guest-policy','--unit-policy'], 1),
+                                      ('guest-policy', ['--guest-policy'] + (['--hardware'] if args.device == 'hardware' else []), 0),
                                       (args.device, ['--hardware'] if args.device == 'hardware' else [], 0)]:
         run = subprocess.run([str(exe)] + arguments, capture_output=True, timeout=60)
         output = run.stdout + run.stderr
@@ -58,6 +60,8 @@ def main():
         print(output.decode(errors='replace').strip())
         if name == 'swapped-low-bytes' and (output.count(b' FAIL') != 2 or output.count(b' PASS') != 7):
             raise RuntimeError('byte-order mutant must fail only the two asymmetric cases')
+        if name == 'unit-policy' and (output.count(b' FAIL') != 1 or output.count(b' PASS') != 9):
+            raise RuntimeError('old unit-number policy must fail only the recorded unit1 case')
         result['cases'].append(dict(name=name, returncode=run.returncode, expected=expected))
     (out / 'result.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
     print('Evidence:', out)

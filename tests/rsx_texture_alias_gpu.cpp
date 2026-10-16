@@ -23,8 +23,14 @@ static ComPtr<ID3DBlob> compile(const char* text, const char* target) {
 }
 int main(int argc, char** argv) {
     bool old = argc > 1 && !strcmp(argv[1], "--unpatched");
-    bool hardware = argc > 1 && !strcmp(argv[1], "--hardware");
+    bool hardware = false;
     bool swapped = argc > 1 && !strcmp(argv[1], "--swapped-low-bytes");
+    bool guest_policy = false, unit_policy = false;
+    for (int a=1;a<argc;++a) {
+        if (!strcmp(argv[a],"--hardware")) hardware=true;
+        if (!strcmp(argv[a],"--guest-policy")) guest_policy=true;
+        if (!strcmp(argv[a],"--unit-policy")) unit_policy=true;
+    }
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
     D3D_FEATURE_LEVEL level;
@@ -62,7 +68,7 @@ int main(int argc, char** argv) {
     td.BindFlags=0; td.Usage=D3D11_USAGE_STAGING; td.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
     check(device->CreateTexture2D(&td,nullptr,&readback), "readback");
     struct Case { unsigned unit; float u,v; unsigned remap; bool named; float want[4];
-                  const char* method; const char* extra; bool asymmetric; } cases[] = {
+                  const char* method; const char* extra; bool asymmetric; bool guest_point; } cases[] = {
         // Independent XY16F crossbar contract: ARGB = R,G,R,G.
         {0,.25f,.25f,0x29e4,false,{.5f,1,0,1}},
         {0,.75f,.25f,0xaae4,false,{2,-1,2,-1}},
@@ -76,11 +82,15 @@ int main(int argc, char** argv) {
         // Host halves are 0x3c80=1.125, 0x3840=.53125 before crossbar.
         {0,.25f,.25f,0x29e4,false,{.53125f,1.125f,0,1},nullptr,nullptr,true},
         {1,.5f,.5f,0xaae4,false,{.53125f,1.125f,.53125f,1.125f},nullptr,nullptr,true},
+        // A recorded unit1 nearest/clamp sampler must not become bilinear/wrap.
+        {1,.49f,.25f,0xaae4,false,{.5f,1,.5f,1},nullptr,nullptr,false,true},
     };
     int failed=0;
     unsigned remaps[16]={};
     for (unsigned index=0; index<sizeof cases/sizeof cases[0]; ++index) {
         const auto& c=cases[index]; char text[65536], name[32];
+        if (c.guest_point && !guest_policy) continue;
+        context->UpdateSubresource(texture.Get(),0,nullptr,bytes,8,0);
         if (c.asymmetric) {
             const unsigned char asymmetric[] = {0x80,0x38,0x40,0x3c, 0x80,0x38,0x40,0x3c,
                                                 0x80,0x38,0x40,0x3c, 0x80,0x38,0x40,0x3c};
@@ -94,7 +104,12 @@ int main(int argc, char** argv) {
             c.named ? "Texture2D rsx_tex1:register(t1);" : "Texture2D rsx_tex[16]:register(t0);",
             name,c.method?c.method:"Sample",c.unit,(double)c.u,(double)c.v,c.extra?c.extra:"");
         remaps[c.unit]=c.remap;
-        if (!old && rsx_texture_alias_apply(text,sizeof text,1u<<c.unit,remaps,c.named?4u:0u,1u)!=1) return 3;
+        unsigned address[16] = {0}, filter[16] = {0}, points = 0;
+        address[c.unit] = (c.unit == 0 || c.guest_point) ? 0x60030303 : 0x60010101;
+        filter[c.unit] = (c.unit == 0 || c.guest_point) ? 0x01012000 : 0x02022000;
+        if (!rsx_texture_alias_guest_policy(1u<<c.unit,address,filter,&points)) return 10;
+        if (unit_policy) points=1u; // Actual old backend call-site policy.
+        if (!old && rsx_texture_alias_apply(text,sizeof text,1u<<c.unit,remaps,c.named?4u:0u,points)!=1) return 3;
         if (swapped) {
             char* a=strstr(text,"(b.w << 8) | b.x");
             char* b=strstr(text,"(b.y << 8) | b.z");
@@ -125,6 +140,17 @@ int main(int argc, char** argv) {
     if (rsx_texture_alias_apply(control,strlen(control)+1,1,remaps,0,1)!=-1) return 6;
     if (rsx_texture_alias_xy16(0xbf,1)!=1 || rsx_texture_alias_xy16(0xa5,1) || rsx_texture_alias_xy16(0xbf,0)) return 7;
     if (rsx_texture_alias_key(1,remaps,1)==rsx_texture_alias_key(0,remaps,1)) return 8;
+    unsigned address[16]={0}, filter[16]={0}, points=0xdead;
+    address[7]=0x60030303; filter[7]=0x01012000;
+    if(!rsx_texture_alias_guest_policy(128,address,filter,&points) || points!=128) return 11;
+    address[7]=0x60010101; filter[7]=0x02022000;
+    if(!rsx_texture_alias_guest_policy(128,address,filter,&points) || points!=0) return 12;
+    points=0xdead; address[7]=0x60030303;
+    if(rsx_texture_alias_guest_policy(128,address,filter,&points) || points!=0xdead) return 13;
+    filter[7]=0x01092000;
+    if(rsx_texture_alias_guest_policy(128,address,filter,&points) || points!=0xdead) return 14;
+    filter[7]=0x02012000;
+    if(rsx_texture_alias_guest_policy(128,address,filter,&points) || points!=0xdead) return 15;
     printf("device=%s unpatched=%d failed=%d\n",hardware?"hardware":"WARP",old,failed);
     return failed?1:0;
 }

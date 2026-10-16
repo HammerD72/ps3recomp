@@ -38,3 +38,29 @@ All nine cases pass WARP/hardware. A deliberately swapped-low-bytes adapter
 passes the original seven but fails exactly the two asymmetric cases; the
 runner checks these counts, demonstrating why the earlier vectors alone could
 not distinguish this incorrect ordering. The unadapted negative fails all nine.
+
+
+## Recorded alias sampling policy
+
+The old backend passed the constant point/clamp mask `1`, assigning every
+other alias unit bilinear/wrap regardless of recorded guest state. An observed
+source-copy draw uses nearest/clamp on unit1 (`address=60030303`,
+`filter=01012000`). An authored two-texel test samples at U=.49: the old
+policy returns RG=(1.22,.04), whereas nearest requires (.5,1).
+
+The backend now records filter state with address/border, excludes records with
+changed filters from merging, derives supported alias policy from those
+immutable registers, and includes the derived mask in PSO identity. Existing
+one-mip nearest/clamp and linear/wrap implementations are retained. Other
+min/mag/address combinations fail explicitly; this is not full guest filtering,
+LOD, anisotropy, convolution or all addressing-mode support. Normal texture
+sampling remains outside this change.
+
+The fixture's `--guest-policy` run exercises all ten GPU cases on WARP or the
+requested hardware adapter. `--guest-policy --unit-policy` restores the actual
+old constant-mask call: exactly the new case fails, nine controls pass.
+The separate asymmetric-byte mutant still fails exactly two of nine cases.
+Policy checks also reject mixed filtering, linear/clamp and an invalid min
+filter without modifying the result. The production record adapter test checks
+immutable filter snapshots and merge identity. None of this establishes native
+graphics or race acceptance.
