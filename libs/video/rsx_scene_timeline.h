@@ -1,3 +1,4 @@
+#include "rsx_timeline_select.h"
 /* Opt-in, one-frame GPU target snapshots. No draw filtering or presentation.
  * The arm file contains: hex-target-offset decimal-op-index [...], at most 8.
  * Copies stay in the original command list and restore each target's state.
@@ -47,6 +48,14 @@ static void scene_timeline_metadata(u32 op)
     if (!f) scene_timeline_fail("metadata open failed");
     fprintf(f, "op=%u fp=%08X exp32=%d vs=%d vertices=%u clear=%d\n",
         op, dr->fp_addr, dr->fp_exp32, dr->vs_idx, dr->vertex_count, dr->is_clear);
+    fprintf(f, "surface_format=%08X target=%08X mrt=%08X/%08X/%08X viewport=%u,%u,%u,%u cb_slot=%u\n",
+        dr->rt_fmt, dr->rt_off, dr->rt_mrt[0], dr->rt_mrt[1], dr->rt_mrt[2],
+        dr->vp_x, dr->vp_y, dr->vp_w, dr->vp_h, dr->cb_slot);
+#ifdef RSX_TIMELINE_DRAW_DATA
+    RSX_TIMELINE_DRAW_DATA(op, f, path);
+#else
+    fprintf(f, "draw_data=unavailable\n");
+#endif
     for (u32 u = 0; u < sizeof(dr->tex)/sizeof(dr->tex[0]); u++) if (dr->tex[u].set) {
         const rsx_texture_state* t = &s_scene_record_tex[op][u];
         fprintf(f, "t%u resolved=%08X address=%08X filter=%08X control0=%08X border=%08X format=%08X remap=%08X extent=%08X\n",
@@ -74,23 +83,20 @@ static void scene_timeline_begin(void)
     size_t n = fread(text, 1, sizeof(text) - 1, f);
     if (ferror(f) || !feof(f)) scene_timeline_fail("arm file exceeds limit or read failed");
     fclose(f); text[n] = 0;
-    char *p = text, *end = NULL;
-    unsigned long target = strtoul(p, &end, 16);
-    if (end == p || target > UINT32_MAX) scene_timeline_fail("invalid target offset");
-    s_scene_timeline.target = (u32)target; p = end;
-    while (*p) {
-        while (*p == ' ' || *p == '\r' || *p == '\n' || *p == '\t') p++;
-        if (!*p) break;
-        unsigned long op = strtoul(p, &end, 10);
-        u32 count = s_scene_timeline.count;
-        if (end == p || op >= MAX_DRAWS || count == 8 ||
-            (count && op <= s_scene_timeline.ops[count - 1]))
-            scene_timeline_fail("invalid, unordered or excessive operation indices");
-        s_scene_timeline.ops[count] = (u32)op;
-        s_scene_timeline.count++; p = end;
+    rsx_timeline_selection selection;
+    if (!rsx_timeline_parse(text, MAX_DRAWS, &selection) || !getenv("RSX_CAP_DIR"))
+        scene_timeline_fail("valid operation/FP selectors and RSX_CAP_DIR required");
+    u32 programs[MAX_DRAWS];
+    u32 count = s_d3d.draw_count < MAX_DRAWS ? s_d3d.draw_count : MAX_DRAWS;
+    if (selection.by_fp)
+        for (u32 i = 0; i < count; ++i) programs[i] = s_d3d.draws[i].is_clear ? 0 : s_d3d.draws[i].fp_addr;
+    if (!rsx_timeline_resolve(&selection, programs, count, s_scene_timeline.ops)) {
+        static int warned;
+        if (!warned++) fprintf(stderr, "[RSXTIMELINE] pending: ordered FP identities absent in current submission\n");
+        return;
     }
-    if (!s_scene_timeline.count || !getenv("RSX_CAP_DIR"))
-        scene_timeline_fail("operation indices and RSX_CAP_DIR required");
+    s_scene_timeline.target = selection.target;
+    s_scene_timeline.count = selection.count;
     s_scene_timeline.active = 1;
     s_scene_timeline.frame = s_d3d.frame_count;
     fprintf(stderr, "[RSXTIMELINE] armed target=0x%X frame=%llu count=%u\n",
