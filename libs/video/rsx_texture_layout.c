@@ -317,9 +317,13 @@ void rsx_texture_component_remap(u32 control1, u32 rsx_fmt, u8 out[4])
     static const u8 lanes_argb[4] = {3, 0, 1, 2};
     static const u8 lanes_g8b8[4] = {1, 0, 1, 0};
     static const u8 lanes_b8[4]   = {RSX_REMAP_ONE, 0, 0, 0};
+    /* XY16F presents {R,G,R,G} in ARGB crossbar order, independently of
+     * the ordinary four-channel ARGB resource mapping. */
+    static const u8 lanes_xy16f[4] = {0, 1, 0, 1};
     const u32 base = rsx_fmt & 0x9Fu;
     const u8* src2res = (base == 0x8Bu) ? lanes_g8b8
-                      : (base == 0x81u) ? lanes_b8 : lanes_argb;
+                      : (base == 0x81u) ? lanes_b8
+                      : (base == 0x9Fu) ? lanes_xy16f : lanes_argb;
 
     if (!(control1 & 0xFFFFu)) control1 = 0xAAE4u;   /* unset -> identity */
 

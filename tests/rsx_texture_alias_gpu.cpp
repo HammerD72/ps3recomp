@@ -61,13 +61,14 @@ int main(int argc, char** argv) {
     check(device->CreateTexture2D(&td,nullptr,&readback), "readback");
     struct Case { unsigned unit; float u,v; unsigned remap; bool named; float want[4];
                   const char* method; const char* extra; } cases[] = {
-        {0,.25f,.25f,0x29e4,false,{1,.5f,0,1}},
-        {0,.75f,.25f,0xaae4,false,{-1,2,0,1}},
-        {0,-2,2,0xaae4,false,{.25f,-.25f,0,1}},
-        {1,.5f,.5f,0xaae4,false,{.5625f,1.3125f,0,1}},
-        {1,0,0,0xaae4,true,{.5625f,1.3125f,0,1}},
-        {0,.25f,.25f,0xaa1b,false,{.5f,1,1,0},"SampleLevel",",0"},
-        {1,.5f,.5f,0xaae4,false,{.5625f,1.3125f,0,1},"SampleBias",",0"},
+        // Independent XY16F crossbar contract: ARGB = R,G,R,G.
+        {0,.25f,.25f,0x29e4,false,{.5f,1,0,1}},
+        {0,.75f,.25f,0xaae4,false,{2,-1,2,-1}},
+        {0,-2,2,0xaae4,false,{-.25f,.25f,-.25f,.25f}},
+        {1,.5f,.5f,0xaae4,false,{1.3125f,.5625f,1.3125f,.5625f}},
+        {1,0,0,0xaae4,true,{1.3125f,.5625f,1.3125f,.5625f}},
+        {0,.25f,.25f,0xaa1b,false,{1,.5f,1,.5f},"SampleLevel",",0"},
+        {1,.5f,.5f,0xaae4,false,{1.3125f,.5625f,1.3125f,.5625f},"SampleBias",",0"},
     };
     int failed=0;
     unsigned remaps[16]={};
