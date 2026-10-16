@@ -22,3 +22,19 @@ raw-RGBA negative path fails all seven revised cases.
 
 These are generic contract tests, not proof that any game's final postprocess,
 motion-buffer encoding, original materials or race display is correct.
+
+The alias fixture additionally has two asymmetric-mantissa cases. The pinned
+reference's `VKGSRender.cpp/get_compatible_surface_format` maps surface8
+(A8R8G8B8) to BGRA8. `VKFormats.cpp/get_format_convert_flags` marks BGRA8 as
+32-bit-swapped and RG16F as16-bit-swapped. `VKTexture.cpp/copy_image_typeless`
+therefore chooses `cs_shuffle_32_16`; `VKCompute.h` selects `bswap_u16_u32`
+from `Program/GLSLSnippets/ShuffleBytes.glsl`, which swaps the halfwords.
+For shader-output RGBA bytes80,38,40,3C, BGRA storage40,38,80,3C becomes
+80,3C,40,38: host halves3C80 (1.125),3840 (0.53125). These independent
+steps agree with the current alias pairs(A,R)/(G,B); no byte-order runtime
+change follows. This establishes only the sampled surface8-to-XY16F contract,
+not every surface format or the guest motion producer's correctness.
+All nine cases pass WARP/hardware. A deliberately swapped-low-bytes adapter
+passes the original seven but fails exactly the two asymmetric cases; the
+runner checks these counts, demonstrating why the earlier vectors alone could
+not distinguish this incorrect ordering. The unadapted negative fails all nine.

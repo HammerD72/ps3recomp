@@ -24,6 +24,7 @@ static ComPtr<ID3DBlob> compile(const char* text, const char* target) {
 int main(int argc, char** argv) {
     bool old = argc > 1 && !strcmp(argv[1], "--unpatched");
     bool hardware = argc > 1 && !strcmp(argv[1], "--hardware");
+    bool swapped = argc > 1 && !strcmp(argv[1], "--swapped-low-bytes");
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
     D3D_FEATURE_LEVEL level;
@@ -40,7 +41,8 @@ int main(int argc, char** argv) {
     ComPtr<ID3D11RasterizerState> rs;
     check(device->CreateRasterizerState(&raster, &rs), "raster"); context->RSSetState(rs.Get());
     D3D11_VIEWPORT vp = {0,0,1,1,0,1}; context->RSSetViewports(1,&vp);
-    // Host RGBA stores guest ARGB byte order. Four distinct XY16F pairs.
+    // Host RGBA retains shader output channels. The format-8 BGRA backing,
+    // then 32/16-bit typeless shuffle, gives half pairs (A,R) and (G,B).
     unsigned char bytes[] = {0,0x38,0,0x3c, 0,0x40,0,0xbc,
                              0,0xb4,0,0x34, 0,0x42,0,0x40};
     D3D11_TEXTURE2D_DESC td = {}; td.Width=td.Height=2; td.MipLevels=td.ArraySize=1;
@@ -60,7 +62,7 @@ int main(int argc, char** argv) {
     td.BindFlags=0; td.Usage=D3D11_USAGE_STAGING; td.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
     check(device->CreateTexture2D(&td,nullptr,&readback), "readback");
     struct Case { unsigned unit; float u,v; unsigned remap; bool named; float want[4];
-                  const char* method; const char* extra; } cases[] = {
+                  const char* method; const char* extra; bool asymmetric; } cases[] = {
         // Independent XY16F crossbar contract: ARGB = R,G,R,G.
         {0,.25f,.25f,0x29e4,false,{.5f,1,0,1}},
         {0,.75f,.25f,0xaae4,false,{2,-1,2,-1}},
@@ -69,11 +71,21 @@ int main(int argc, char** argv) {
         {1,0,0,0xaae4,true,{1.3125f,.5625f,1.3125f,.5625f}},
         {0,.25f,.25f,0xaa1b,false,{1,.5f,1,.5f},"SampleLevel",",0"},
         {1,.5f,.5f,0xaae4,false,{1.3125f,.5625f,1.3125f,.5625f},"SampleBias",",0"},
+        // Distinct low bytes discriminate cross-channel/byte-order guesses.
+        // BGRA bytes 40 38 80 3c -> halfword swap -> 80 3c 40 38.
+        // Host halves are 0x3c80=1.125, 0x3840=.53125 before crossbar.
+        {0,.25f,.25f,0x29e4,false,{.53125f,1.125f,0,1},nullptr,nullptr,true},
+        {1,.5f,.5f,0xaae4,false,{.53125f,1.125f,.53125f,1.125f},nullptr,nullptr,true},
     };
     int failed=0;
     unsigned remaps[16]={};
     for (unsigned index=0; index<sizeof cases/sizeof cases[0]; ++index) {
         const auto& c=cases[index]; char text[65536], name[32];
+        if (c.asymmetric) {
+            const unsigned char asymmetric[] = {0x80,0x38,0x40,0x3c, 0x80,0x38,0x40,0x3c,
+                                                0x80,0x38,0x40,0x3c, 0x80,0x38,0x40,0x3c};
+            context->UpdateSubresource(texture.Get(),0,nullptr,asymmetric,8,0);
+        }
         if (c.named) snprintf(name,sizeof name,"rsx_tex%u",c.unit);
         else snprintf(name,sizeof name,"rsx_tex[%u]",c.unit);
         snprintf(text,sizeof text,
@@ -83,6 +95,13 @@ int main(int argc, char** argv) {
             name,c.method?c.method:"Sample",c.unit,(double)c.u,(double)c.v,c.extra?c.extra:"");
         remaps[c.unit]=c.remap;
         if (!old && rsx_texture_alias_apply(text,sizeof text,1u<<c.unit,remaps,c.named?4u:0u,1u)!=1) return 3;
+        if (swapped) {
+            char* a=strstr(text,"(b.w << 8) | b.x");
+            char* b=strstr(text,"(b.y << 8) | b.z");
+            if (!a || !b) return 9;
+            a[strlen("(b.w << 8) | b.")]='z';
+            b[strlen("(b.y << 8) | b.")]='x';
+        }
         auto ps=compile(text,"ps_5_0"); ComPtr<ID3D11PixelShader> pixel;
         check(device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,&pixel),"PS");
         context->PSSetShader(pixel.Get(),nullptr,0);
