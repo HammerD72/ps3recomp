@@ -170,6 +170,31 @@ static void scene_timeline_finish(void)
         cap_write_bmp(path, data, s_scene_timeline.copies[i].width,
             s_scene_timeline.copies[i].height, s_scene_timeline.copies[i].pitch,
             s_scene_timeline.copies[i].format);
+        /* BMP visualization discards alpha and clamps signed/HDR values.
+         * Preserve the checked readback bytes for numeric shader diagnosis. */
+        char raw_path[528];
+        int raw_length = snprintf(raw_path, sizeof(raw_path), "%s.raw", path);
+        if (raw_length < 0 || (size_t)raw_length >= sizeof(raw_path) ||
+            GetFileAttributesA(raw_path) != INVALID_FILE_ATTRIBUTES)
+            scene_timeline_fail("invalid or existing raw output path");
+        FILE* raw = fopen(raw_path, "wb");
+        if (!raw) scene_timeline_fail("raw output open failed");
+        if (fwrite(data, 1, range.End, raw) != range.End)
+            scene_timeline_fail("raw output write failed");
+        if (fclose(raw)) scene_timeline_fail("raw output close failed");
+        char layout_path[528];
+        int layout_length = snprintf(layout_path, sizeof(layout_path), "%s.layout", path);
+        if (layout_length < 0 || (size_t)layout_length >= sizeof(layout_path) ||
+            GetFileAttributesA(layout_path) != INVALID_FILE_ATTRIBUTES)
+            scene_timeline_fail("invalid or existing layout output path");
+        FILE* layout = fopen(layout_path, "wb");
+        if (!layout) scene_timeline_fail("layout output open failed");
+        fprintf(layout, "target=%08X width=%u height=%u pitch=%u dxgi=%u bytes=%llu\n",
+            s_scene_timeline.target, s_scene_timeline.copies[i].width,
+            s_scene_timeline.copies[i].height, s_scene_timeline.copies[i].pitch,
+            s_scene_timeline.copies[i].format, (unsigned long long)range.End);
+        if (ferror(layout)) scene_timeline_fail("layout output write failed");
+        if (fclose(layout)) scene_timeline_fail("layout output close failed");
         D3D12_RANGE written = {0, 0}; rb->lpVtbl->Unmap(rb, 0, &written);
         rb->lpVtbl->Release(rb); s_scene_timeline.copies[i].resource = NULL;
         fprintf(stderr, "[RSXTIMELINE] completed %s\n", path);
