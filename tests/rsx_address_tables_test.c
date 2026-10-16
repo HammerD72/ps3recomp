@@ -12,6 +12,9 @@
 #include <assert.h>
 #include <string.h>
 #include <stdint.h>
+#ifdef _DEBUG
+#include <crtdbg.h>
+#endif
 typedef struct { struct { unsigned address, border_color; } textures[16]; } rsx_state;
 typedef struct { struct { unsigned address, border; int set; } tex[16]; unsigned fp_addr; } D3D12DrawRecord;
 typedef struct FakeHeap {
@@ -67,6 +70,16 @@ static int vp_upload_retire(void* context) { (void)context; if (retire_ok) retir
 #include "rsx_address_tables.h"
 int main(int argc, char** argv)
 {
+    /* The retirement negative control aborts deliberately. Debug CRT dialogs
+     * would wait for a desktop response instead of returning its real error. */
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#ifdef _DEBUG
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+#endif
     s_d3d.device = &device; s_d3d.cmd_list = &list;
     ID3D12PipelineState* pso = (ID3D12PipelineState*)(uintptr_t)0x44;
     s_d3d.vp_fp_n = 1; s_d3d.vp_fp[0].pso = pso; s_d3d.vp_fp[0].sampler_mask = 2;

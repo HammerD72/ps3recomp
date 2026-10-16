@@ -583,6 +583,7 @@ if(PS3RECOMP_BUILD_TESTS OR BUILD_TESTING)
         add_test(NAME rsx_address COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_rsx_address.py"
             "$<TARGET_FILE:test_rsx_address_gpu>" "$<TARGET_FILE:test_rsx_address_tables>")
+        set_tests_properties(rsx_address PROPERTIES TIMEOUT 300)
     endif()
     add_executable(test_rsx_upload_buffer tests/test_rsx_upload_buffer.c)
     add_test(NAME rsx_upload_buffer COMMAND test_rsx_upload_buffer)

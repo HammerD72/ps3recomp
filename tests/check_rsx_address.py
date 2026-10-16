@@ -4,7 +4,7 @@ import sys
 
 
 def run(command):
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True, timeout=60)
     print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)
     return result
