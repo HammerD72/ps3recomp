@@ -12,6 +12,7 @@ typedef struct RsxAddressHeap {
 } RsxAddressHeap;
 static RsxAddressHeap* s_address_heaps;
 static ID3D12DescriptorHeap* s_address_bound;
+static const D3D12_SAMPLER_DESC* s_address_observed_table;
 
 static void address_fail(const char* message)
 {
@@ -26,6 +27,7 @@ static void address_retire(void)
         h->heap->lpVtbl->Release(h->heap); free(h);
     }
     s_address_bound = NULL;
+    s_address_observed_table = NULL;
 }
 static void address_record(D3D12DrawRecord* dr)
 {
@@ -112,6 +114,7 @@ static int address_bind(const D3D12DrawRecord* dr, ID3D12PipelineState* pso)
     h->heap->lpVtbl->GetGPUDescriptorHandleForHeapStart(h->heap, &gpu);
     gpu.ptr += (UINT64)slot * 16 * inc;
     s_d3d.cmd_list->lpVtbl->SetGraphicsRootDescriptorTable(s_d3d.cmd_list, 3, gpu);
+    s_address_observed_table = h->tables[slot];
     return changed;
 }
 #endif

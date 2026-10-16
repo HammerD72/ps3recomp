@@ -228,8 +228,10 @@ typedef struct {
                              * and a 2D variant of the same program are different
                              * pipelines and must not share a cache entry. */
     u32 sampler_mask;
+    u32 diag_shader_id; /* Opt-in bound-source evidence only; not a PSO key. */
     ID3D12PipelineState* pso;
 } VPFPEntry;
+static u32 scene_bound_shader(const char* source, ID3DBlob* binary, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pd);
 /* Guest-FP PSO cache. 16 entries thrashed badly: this title needs far more
  * distinct (fp, vs, blend, rt, cmask, ucode-hash) combinations than that in a
  * single frame, so the FIFO evicted entries that were needed again immediately
@@ -2460,6 +2462,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     ID3D12PipelineState* pso = NULL;
     hr = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(
         s_d3d.device, &pd, &IID_ID3D12PipelineState, (void**)&pso);
+    const u32 diag_shader_id = SUCCEEDED(hr) ? scene_bound_shader(hlsl, pb, &pd) : 0;
     pb->lpVtbl->Release(pb);
     if (FAILED(hr)) {
         static int _e3=0; if (_e3++<16) printf("[FP] PSO FAIL (fp=0x%08X, 0x%08lX)\n", fp_addr, hr);
@@ -2487,6 +2490,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     s_d3d.vp_fp[s_d3d.vp_fp_n].cube_mask = cube_mask;
     s_d3d.vp_fp[s_d3d.vp_fp_n].alias_key = alias_key;
     s_d3d.vp_fp[s_d3d.vp_fp_n].sampler_mask = rsx_address_sampler_mask(hlsl);
+    s_d3d.vp_fp[s_d3d.vp_fp_n].diag_shader_id = diag_shader_id;
     s_d3d.vp_fp[s_d3d.vp_fp_n].pso     = pso;
     s_d3d.vp_fp_n++;
     return pso;
@@ -3588,6 +3592,10 @@ static D3D12_CPU_DESCRIPTOR_HANDLE off_rt_rtv(int slot)
 
 /* Write a texture SRV (or a null SRV when res == NULL) at an absolute SRV
  * heap slot. Used to fill per-draw t0-t3 descriptor windows. */
+#define RSX_BOUND_OFFRT_COUNT MAX_OFF_RTS
+#include "rsx_bound_capture.h"
+#undef RSX_BOUND_OFFRT_COUNT
+
 static void srv_write_ex(u32 heap_slot, ID3D12Resource* res, DXGI_FORMAT fmt,
                          UINT mapping, int cube)
 {
@@ -3606,6 +3614,7 @@ static void srv_write_ex(u32 heap_slot, ID3D12Resource* res, DXGI_FORMAT fmt,
     s_d3d.srv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(s_d3d.srv_heap, &h);
     h.ptr += (u64)heap_slot * s_d3d.srv_inc;
     s_d3d.device->lpVtbl->CreateShaderResourceView(s_d3d.device, res, &sv, h);
+    scene_bound_srv(heap_slot, res, (UINT)fmt, mapping, cube);
 }
 
 static void srv_write(u32 heap_slot, ID3D12Resource* res, DXGI_FORMAT fmt, UINT mapping)
@@ -4786,8 +4795,11 @@ static void render_frame(void)
                           s_d3d.cmd_list, bn, brh, FALSE, &dsv_handle);
                   } }
                 cpu_surface_written(cur_rt,cur_m);
+                scene_bound_draw(d, DRAW_SRV_BASE+d*4, 4, dpso ? dpso : vpso);
                 s_d3d.cmd_list->lpVtbl->DrawInstanced(s_d3d.cmd_list,
                     dr->vertex_count, 1, dr->vb_byte_offset / 256, 0);
+                scene_bound_after(d,cur_rt>=0?s_d3d.off_rt[cur_rt].res:s_d3d.render_targets[s_d3d.frame_index],
+                    cur_rt>=0?s_d3d.off_rt[cur_rt].st:D3D12_RESOURCE_STATE_RENDER_TARGET);
             if (dr->rt_off == 0) rsx_record_batch_display_write(&s_record_batch);
                 /* VP_SUBMIT=<N>: prove the VP pass actually reaches the GPU.
                  * "records exist" and "draws were submitted" are different
@@ -5062,6 +5074,7 @@ skip_dump_consider: ;
     s_d3d.cmd_queue->lpVtbl->ExecuteCommandLists(s_d3d.cmd_queue, 1, cmd_lists);
     s_cpu_surface_recording=0;
     scene_timeline_finish();
+    scene_bound_finish();
 
     /* D3D12_IQ=1: drain the debug layer's message queue after submitting the
      * frame. The legacy (is_vp=0) DrawInstanced path silently produced ZERO
