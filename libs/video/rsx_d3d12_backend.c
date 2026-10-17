@@ -41,6 +41,7 @@
 #include <dxgi1_6.h>
 #include <d3dcompiler.h>
 #include "rsx_d3d12_fault.h"
+#include "rsx_gpu_submission.h"
 #include "rsx_mrt_masks.h"
 #include "rsx_d3d12_mrt.h"
 static u32 rsx_record_color_masks(const rsx_state* state)
@@ -370,6 +371,27 @@ typedef struct {
 } D3D12State;
 
 static D3D12State s_d3d;
+static void gpu_submission_fail(const char *where) {
+ fprintf(stderr,"[GPU-SUBMISSION] %s failed (path/capacity/budget/write); no metadata accepted\n",where);abort();
+}
+static void gpu_submission_begin(void) {
+ const char *dir=getenv("RSX_GPU_SUBMISSION_DIR"),*arm=getenv("RSX_GPU_SUBMISSION_ARM_FILE");
+ if(!rsx_gpu_fault_enabled() || !dir || !arm || GetFileAttributesA(arm)==INVALID_FILE_ATTRIBUTES)return;
+ if(!rsx_submission_begin(dir,s_d3d.frame_count,(uintptr_t)s_d3d.cmd_list,(uintptr_t)s_d3d.cmd_queue))gpu_submission_fail("begin");
+ wchar_t name[96];swprintf(name,96,L"RSX submission %u frame %llu",s_gpu_submission.h.serial,(unsigned long long)s_d3d.frame_count);
+ rsx_gpu_fault_name((ID3D12Object*)s_d3d.cmd_list,name);
+}
+static void gpu_submission_record(u32 op,const D3D12DrawRecord *dr,ID3D12PipelineState *pso) {
+ if(!s_gpu_submission.active)return;
+ rsx_submission_row row={0};row.op=op;row.vertices=dr->vertex_count;row.vb_offset=dr->vb_byte_offset;
+ row.is_vp=dr->is_vp;row.fp=dr->fp_addr;row.control=dr->fp_ctrl;row.vs=(u32)dr->vs_idx;
+ for(int i=0;i<s_d3d.vp_fp_n;++i)if(s_d3d.vp_fp[i].pso==pso){row.shader=s_d3d.vp_fp[i].diag_shader_id;break;}
+ row.rt=dr->rt_off;/* No per-draw zeta in this backend revision. */ row.cmask=dr->cmask;row.blend=dr->blend_key;
+ row.width=dr->rt_w;row.height=dr->rt_h;row.depth_stencil=dr->ds_key;row.viewport_w=dr->vp_w;row.viewport_h=dr->vp_h;
+ row.texture0=dr->tex[0].raw;row.texture1=dr->tex[1].raw;
+ if(!rsx_submission_draw(&row))gpu_submission_fail("draw count");
+}
+
 char g_rsx_title_base[128] = "ps3recomp";
 static u32 s_dbg_last_draws = 0;
 static u64 s_req_verts = 0, s_req_draws = 0, s_drop_draws = 0;
@@ -3957,6 +3979,7 @@ static void render_frame(void)
     s_d3d.cmd_allocators[fi]->lpVtbl->Reset(s_d3d.cmd_allocators[fi]);
     s_cpu_surface_recording=1;
     s_d3d.cmd_list->lpVtbl->Reset(s_d3d.cmd_list, s_d3d.cmd_allocators[fi], NULL);
+    gpu_submission_begin();
 
     /* Upload the bound font atlas into an R8_UNORM texture and create its SRV.
      * The atlas is a linear 8-bit coverage map, so a straight row copy (no
@@ -4526,6 +4549,7 @@ static void render_frame(void)
                 s_d3d.cmd_list->lpVtbl->IASetPrimitiveTopology(s_d3d.cmd_list, topo_to_d3d(dr->topology));
                 last_topo = dr->topology;
             }
+            gpu_submission_record(d,dr,target_pso);
             u32 start_vert = dr->vb_byte_offset / VERTEX_STRIDE;
             s_d3d.cmd_list->lpVtbl->DrawInstanced(
                 s_d3d.cmd_list, dr->vertex_count, 1, start_vert, 0);
@@ -4802,6 +4826,7 @@ static void render_frame(void)
                   } }
                 cpu_surface_written(cur_rt,cur_m);
                 scene_bound_draw(d, DRAW_SRV_BASE+d*4, 4, dpso ? dpso : vpso);
+                gpu_submission_record(d,dr,dpso ? dpso : vpso);
                 s_d3d.cmd_list->lpVtbl->DrawInstanced(s_d3d.cmd_list,
                     dr->vertex_count, 1, dr->vb_byte_offset / 256, 0);
                 scene_bound_after(d,cur_rt>=0?s_d3d.off_rt[cur_rt].res:s_d3d.render_targets[s_d3d.frame_index],
@@ -5077,6 +5102,7 @@ skip_dump_consider: ;
     /* Close and execute */
     s_d3d.cmd_list->lpVtbl->Close(s_d3d.cmd_list);
     ID3D12CommandList* cmd_lists[] = {(ID3D12CommandList*)s_d3d.cmd_list};
+    if(!rsx_submission_commit())gpu_submission_fail("commit");
     s_d3d.cmd_queue->lpVtbl->ExecuteCommandLists(s_d3d.cmd_queue, 1, cmd_lists);
     s_cpu_surface_recording=0;
     scene_timeline_finish();

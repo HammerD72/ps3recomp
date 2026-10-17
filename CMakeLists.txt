@@ -638,6 +638,12 @@ if(PS3RECOMP_BUILD_TESTS OR BUILD_TESTING)
             "$<TARGET_FILE:test_rsx_address_gpu>" "$<TARGET_FILE:test_rsx_address_tables>")
         set_tests_properties(rsx_address PROPERTIES TIMEOUT 300)
     endif()
+    add_executable(test_rsx_gpu_submission tests/rsx_gpu_submission.c)
+    target_include_directories(test_rsx_gpu_submission PRIVATE libs/video)
+    add_test(NAME rsx_gpu_submission COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_rsx_gpu_submission.py" "$<TARGET_FILE:test_rsx_gpu_submission>")
+    set_tests_properties(rsx_gpu_submission PROPERTIES TIMEOUT 45)
+
     add_executable(test_rsx_fp_decompiler libs/video/tests/test_fp_decompiler.c
         libs/video/rsx_fp_decompiler.c)
     target_include_directories(test_rsx_fp_decompiler PRIVATE include libs/video)
