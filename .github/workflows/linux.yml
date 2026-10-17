@@ -67,8 +67,8 @@ jobs:
       - name: Memory allocation and FIFO trace regressions
         run: |
           cmake -S . -B build -DPS3RECOMP_BUILD_TESTS=ON
-          cmake --build build --target test_rsx_gpu_submission test_rsx_fp_decompiler test_memory_container test_gcm_draw_trace test_rsx_upload_buffer test_rsx_upload_strip test_rsx_record_batch test_rsx_texture_remap test_rsx_timeline_select test_rsx_mrt_observer test_rsx_mrt_masks
-          ctest --test-dir build -R "^(rsx_gpu_submission|rsx_fp_decompiler|memory_container_allocation|gcm_draw_trace|rsx_upload_buffer|rsx_upload_strip|rsx_record_batch|rsx_texture_remap|rsx_timeline_select|rsx_mrt_observer|rsx_mrt_masks)$" --output-on-failure
+          cmake --build build --target test_rsx_gpu_references test_rsx_gpu_submission test_rsx_fp_decompiler test_memory_container test_gcm_draw_trace test_rsx_upload_buffer test_rsx_upload_strip test_rsx_record_batch test_rsx_texture_remap test_rsx_timeline_select test_rsx_mrt_observer test_rsx_mrt_masks
+          ctest --test-dir build -R "^(rsx_gpu_references|rsx_gpu_submission|rsx_fp_decompiler|memory_container_allocation|gcm_draw_trace|rsx_upload_buffer|rsx_upload_strip|rsx_record_batch|rsx_texture_remap|rsx_timeline_select|rsx_mrt_observer|rsx_mrt_masks)$" --output-on-failure
 
       - name: Verify the archive exists and is x86-64
         run: |

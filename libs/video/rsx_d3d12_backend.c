@@ -1337,6 +1337,23 @@ static int vp_upload_retire(void* context)
         s_d3d.fence->lpVtbl->GetCompletedValue(s_d3d.fence) >=
         s_d3d.fence_values[s_d3d.frame_index];
 }
+#include "rsx_gpu_references.h"
+static rsx_gpu_references s_gpu_pso_refs;
+static void gpu_pso_add(void *context,void *object) {
+ (void)context;ID3D12PipelineState *p=object;p->lpVtbl->AddRef(p);
+}
+static void gpu_pso_release(void *context,void *object) {
+ (void)context;ID3D12PipelineState *p=object;p->lpVtbl->Release(p);
+}
+static const rsx_gpu_reference_ops s_gpu_pso_ops={NULL,gpu_pso_add,gpu_pso_release,vp_upload_retire};
+static void gpu_pso_hold(ID3D12PipelineState *pso) {
+ if(!rsx_gpu_reference_hold(&s_gpu_pso_refs,pso,&s_gpu_pso_ops)) {
+  fprintf(stderr,"[RSXPSO] Recorded pipeline reference capacity exceeded or invalid pipeline\n");abort();
+ }
+}
+static int gpu_pso_retire(void) {
+ return rsx_gpu_reference_retire(&s_gpu_pso_refs,&s_gpu_pso_ops);
+}
 #include "rsx_address_tables.h"
 
 static void vp_upload_dispose(void* context, rsx_upload_buffer* b)
@@ -4549,6 +4566,7 @@ static void render_frame(void)
                 s_d3d.cmd_list->lpVtbl->IASetPrimitiveTopology(s_d3d.cmd_list, topo_to_d3d(dr->topology));
                 last_topo = dr->topology;
             }
+            gpu_pso_hold(target_pso);
             gpu_submission_record(d,dr,target_pso);
             u32 start_vert = dr->vb_byte_offset / VERTEX_STRIDE;
             s_d3d.cmd_list->lpVtbl->DrawInstanced(
@@ -4826,6 +4844,7 @@ static void render_frame(void)
                   } }
                 cpu_surface_written(cur_rt,cur_m);
                 scene_bound_draw(d, DRAW_SRV_BASE+d*4, 4, dpso ? dpso : vpso);
+                gpu_pso_hold(dpso ? dpso : vpso);
                 gpu_submission_record(d,dr,dpso ? dpso : vpso);
                 s_d3d.cmd_list->lpVtbl->DrawInstanced(s_d3d.cmd_list,
                     dr->vertex_count, 1, dr->vb_byte_offset / 256, 0);
@@ -6882,7 +6901,7 @@ void rsx_d3d12_backend_shutdown(void)
     if (!s_d3d.initialized) return;
     cpu_surface_shutdown();
 
-    wait_for_gpu();
+    address_retire();
 
     /* Release D3D12 resources */
     if (s_d3d.vertex_buffer) {

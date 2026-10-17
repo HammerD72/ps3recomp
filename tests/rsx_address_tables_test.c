@@ -66,7 +66,7 @@ static struct {
     int vp_fp_n;
     struct { ID3D12PipelineState* pso; unsigned sampler_mask; } vp_fp[1];
 } s_d3d;
-static int vp_upload_retire(void* context) { (void)context; if (retire_ok) retired++; return retire_ok; }
+static int gpu_pso_retire(void) { if (retire_ok) retired++; return retire_ok; }
 #include "rsx_address_tables.h"
 int main(int argc, char** argv)
 {

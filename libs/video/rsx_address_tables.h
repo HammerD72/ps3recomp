@@ -1,4 +1,4 @@
-/* Included after vp_upload_retire. Immutable tables survive every queued draw.
+/* Included after gpu_pso_retire. Immutable tables survive every queued draw.
  * Grow by another legal-size heap, never overwrite a live descriptor. The
  * renderer's checked batch retirement is the sole reclamation boundary. */
 #ifndef RSX_ADDRESS_TABLES_H
@@ -20,7 +20,7 @@ static void address_fail(const char* message)
 }
 static void address_retire(void)
 {
-    if (!vp_upload_retire(NULL)) address_fail("GPU retirement failed");
+    if (!gpu_pso_retire()) address_fail("GPU retirement failed; recorded PSO references retained");
     while (s_address_heaps) {
         RsxAddressHeap* h = s_address_heaps;
         s_address_heaps = h->next;
