@@ -384,10 +384,10 @@ static void gpu_submission_begin(void) {
 static void gpu_submission_record(u32 op,const D3D12DrawRecord *dr,ID3D12PipelineState *pso) {
  if(!s_gpu_submission.active)return;
  rsx_submission_row row={0};row.op=op;row.vertices=dr->vertex_count;row.vb_offset=dr->vb_byte_offset;
- row.is_vp=dr->is_vp;row.fp=dr->fp_addr;row.control=dr->fp_ctrl;row.vs=(u32)dr->vs_idx;
+ row.is_vp=dr->is_vp;row.fp=dr->fp_addr;row.control=UINT32_MAX; /* Not retained by this backend revision. */row.vs=(u32)dr->vs_idx;
  for(int i=0;i<s_d3d.vp_fp_n;++i)if(s_d3d.vp_fp[i].pso==pso){row.shader=s_d3d.vp_fp[i].diag_shader_id;break;}
- row.rt=dr->rt_off;/* No per-draw zeta in this backend revision. */ row.cmask=dr->cmask;row.blend=dr->blend_key;
- row.width=dr->rt_w;row.height=dr->rt_h;row.depth_stencil=dr->ds_key;row.viewport_w=dr->vp_w;row.viewport_h=dr->vp_h;
+ row.rt=dr->rt_off;row.zeta=UINT32_MAX; /* Unavailable, not an observed address. */ row.cmask=dr->cmask;row.blend=dr->blend_key;
+ row.width=dr->rt_w;row.height=dr->rt_h;row.depth_stencil=UINT64_MAX; /* Not retained by this backend revision. */row.viewport_w=dr->vp_w;row.viewport_h=dr->vp_h;
  row.texture0=dr->tex[0].raw;row.texture1=dr->tex[1].raw;
  if(!rsx_submission_draw(&row))gpu_submission_fail("draw count");
 }
