@@ -59,8 +59,8 @@ jobs:
       - name: Memory allocation and FIFO trace regressions
         run: |
           cmake -S . -B build -DPS3RECOMP_BUILD_TESTS=ON
-          cmake --build build --target test_memory_container test_gcm_draw_trace test_rsx_upload_buffer test_rsx_upload_strip test_rsx_record_batch test_rsx_texture_remap test_rsx_timeline_select test_rsx_mrt_observer test_rsx_mrt_masks test_rsx_mrt_masks_gpu test_rsx_address_gpu test_rsx_address_tables test_rsx_depth_alias_gpu
-          ctest --test-dir build -R "^(memory_container_allocation|gcm_draw_trace|rsx_upload_buffer|rsx_upload_strip|rsx_record_batch|rsx_texture_remap|rsx_timeline_select|rsx_mrt_observer|rsx_mrt_masks|rsx_mrt_masks_gpu|rsx_address|rsx_depth_alias)$" --output-on-failure
+          cmake --build build --target test_rsx_fp_decompiler test_rsx_fp_pack_gpu test_memory_container test_gcm_draw_trace test_rsx_upload_buffer test_rsx_upload_strip test_rsx_record_batch test_rsx_texture_remap test_rsx_timeline_select test_rsx_mrt_observer test_rsx_mrt_masks test_rsx_mrt_masks_gpu test_rsx_address_gpu test_rsx_address_tables test_rsx_depth_alias_gpu
+          ctest --test-dir build -R "^(rsx_fp_decompiler|rsx_fp_pack|memory_container_allocation|gcm_draw_trace|rsx_upload_buffer|rsx_upload_strip|rsx_record_batch|rsx_texture_remap|rsx_timeline_select|rsx_mrt_observer|rsx_mrt_masks|rsx_mrt_masks_gpu|rsx_address|rsx_depth_alias)$" --output-on-failure
 
       - name: Verify the library exists
         shell: bash

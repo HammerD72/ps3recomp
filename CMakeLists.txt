@@ -594,6 +594,15 @@ if(PS3RECOMP_BUILD_TESTS OR BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_rsx_mrt_masks.py" "$<TARGET_FILE:test_rsx_mrt_masks_gpu>")
         set_tests_properties(rsx_mrt_masks_gpu PROPERTIES TIMEOUT 90)
 
+        add_executable(test_rsx_fp_pack_gpu tests/rsx_fp_pack_gpu.cpp
+            libs/video/rsx_fp_decompiler.c)
+        target_include_directories(test_rsx_fp_pack_gpu PRIVATE include libs/video)
+        target_compile_features(test_rsx_fp_pack_gpu PRIVATE cxx_std_17)
+        target_link_libraries(test_rsx_fp_pack_gpu PRIVATE d3d11 d3dcompiler)
+        add_test(NAME rsx_fp_pack COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_rsx_fp_pack.py" "$<TARGET_FILE:test_rsx_fp_pack_gpu>")
+        set_tests_properties(rsx_fp_pack PROPERTIES TIMEOUT 180)
+
         add_executable(test_rsx_depth_alias_gpu tests/rsx_depth_alias_gpu.c)
         target_include_directories(test_rsx_depth_alias_gpu PRIVATE libs/video)
         target_link_libraries(test_rsx_depth_alias_gpu PRIVATE d3d12 dxgi dxguid d3dcompiler)
@@ -612,6 +621,10 @@ if(PS3RECOMP_BUILD_TESTS OR BUILD_TESTING)
             "$<TARGET_FILE:test_rsx_address_gpu>" "$<TARGET_FILE:test_rsx_address_tables>")
         set_tests_properties(rsx_address PROPERTIES TIMEOUT 300)
     endif()
+    add_executable(test_rsx_fp_decompiler libs/video/tests/test_fp_decompiler.c
+        libs/video/rsx_fp_decompiler.c)
+    target_include_directories(test_rsx_fp_decompiler PRIVATE include libs/video)
+    add_test(NAME rsx_fp_decompiler COMMAND test_rsx_fp_decompiler)
     add_executable(test_rsx_upload_buffer tests/test_rsx_upload_buffer.c)
     add_test(NAME rsx_upload_buffer COMMAND test_rsx_upload_buffer)
     file(READ "${CMAKE_CURRENT_SOURCE_DIR}/libs/video/rsx_d3d12_backend.c" RSX_UPLOAD_SOURCE)

@@ -327,6 +327,19 @@ int main(void)
         check("large_program_return", backend_hlsl, "return (_o == _o) ? _o");
     }
 
+    /* PK2H must preserve the packed word for later byte/half unpacking. */
+    {
+        u8 prog[16] = {0};
+        put_word(prog, OPC(0x24) | OUTMASK_ALL | INSRC(1) | END);
+        put_word(prog + 4, T_INPUT | SWZ_IDENT | EXEC_ALWAYS);
+        int n = rsx_fp_decompile(prog, sizeof prog, CTRL_32BIT, hlsl, sizeof hlsl);
+        check_true("pack_half_decoded", n == 1);
+        check_true("pack_half_name", !strcmp(rsx_fp_opcode_name(0x24), "PK2H"));
+        check_absent("pack_half_handled", hlsl, "unhandled FP opcode");
+        check("pack_half_low", hlsl, "rsx_pack_half_rte(((input.col0).xyzw).x)");
+        check("pack_half_high", hlsl, "rsx_pack_half_rte(((input.col0).xyzw).y) << 16");
+    }
+
     printf("\n===========================================\n");
     printf("Results: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
