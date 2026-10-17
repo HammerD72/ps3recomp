@@ -21,6 +21,29 @@ static void bound_blob(const char* path, const void* data, size_t n)
     if (fclose(f)) scene_timeline_fail("binding output close failed");
     s_bound_file_bytes+=n;
 }
+/* Opt-in compiler reproducer: retain final adapted source before releasing
+ * the failed compiler blob. Fingerprints deduplicate repeated draw failures. */
+static void scene_bound_failed_shader(u32 fp, const char* source, ID3DBlob* error)
+{
+    if(!bound_enabled())return;
+    const char* dir=getenv("RSX_CAP_DIR");
+    if(!dir)scene_timeline_fail("failed shader directory absent");
+    if(!CreateDirectoryA(dir,NULL) && GetLastError()!=ERROR_ALREADY_EXISTS)
+        scene_timeline_fail("failed shader directory creation failed");
+    u64 hash=14695981039346656037ull;
+    for(const unsigned char* p=(const unsigned char*)source;*p;++p)hash=(hash^*p)*1099511628211ull;
+    char path[512];
+    int n=snprintf(path,sizeof(path),"%s/failed_shader_%08X_%016llX.hlsl",dir,fp,(unsigned long long)hash);
+    if(n<0 || (size_t)n>=sizeof(path))scene_timeline_fail("failed shader path too long");
+    if(GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES)return;
+    bound_blob(path,source,strlen(source));
+    fprintf(stderr,"[BOUND] failed shader fp=%08X source=%s\n",fp,path);
+    if(error) {
+        n=snprintf(path,sizeof(path),"%s/failed_shader_%08X_%016llX.error.txt",dir,fp,(unsigned long long)hash);
+        if(n<0 || (size_t)n>=sizeof(path))scene_timeline_fail("failed shader diagnostic path too long");
+        bound_blob(path,error->lpVtbl->GetBufferPointer(error),error->lpVtbl->GetBufferSize(error));
+    }
+}
 static u32 scene_bound_shader(const char* source, ID3DBlob* binary, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pd)
 {
     if (!bound_enabled()) return 0;

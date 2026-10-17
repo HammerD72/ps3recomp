@@ -231,6 +231,7 @@ typedef struct {
     u32 diag_shader_id; /* Opt-in bound-source evidence only; not a PSO key. */
     ID3D12PipelineState* pso;
 } VPFPEntry;
+static void scene_bound_failed_shader(u32 fp, const char* source, ID3DBlob* error);
 static u32 scene_bound_shader(const char* source, ID3DBlob* binary, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pd);
 /* Guest-FP PSO cache. 16 entries thrashed badly: this title needs far more
  * distinct (fp, vs, blend, rt, cmask, ucode-hash) combinations than that in a
@@ -2376,6 +2377,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "guest_fp", NULL, NULL,
                             "main", "ps_5_0", 0, 0, &pb, &e);
     if (FAILED(hr) || !pb) {
+        scene_bound_failed_shader(fp_addr,hlsl,e);
         static int _e2=0; if (_e2++<16)
             printf("[FP] PS compile FAIL (fp=0x%08X): %s\n", fp_addr,
                    e ? (const char*)e->lpVtbl->GetBufferPointer(e) : "?");

@@ -6,6 +6,7 @@ typedef struct CpuSurfaceRequest {
     u32 address, bytes;
     HANDLE done;
     int status;
+    u64 queued_ms;
 } CpuSurfaceRequest;
 static SRWLOCK s_cpu_surface_lock = SRWLOCK_INIT;
 static CpuSurfaceRequest *s_cpu_surface_head, *s_cpu_surface_tail;
@@ -102,6 +103,9 @@ static void cpu_surface_service(void) {
     while(request) {
         CpuSurfaceRequest *next=request->next;
         cpu_surface_read(request->address,request->bytes);request->status=0;
+        u64 elapsed=GetTickCount64()-request->queued_ms;
+        if(elapsed>=1000)fprintf(stderr,"[CPUSURFACE] complete address=%08X bytes=%u elapsed_ms=%llu renderer=%lu\n",
+            request->address,request->bytes,(unsigned long long)elapsed,(unsigned long)GetCurrentThreadId());
         if(!SetEvent(request->done))cpu_surface_fail("CPU completion event",E_FAIL);
         request=next;
     }
@@ -109,7 +113,7 @@ static void cpu_surface_service(void) {
 static void cpu_surface_request(u32 address,u32 bytes,void *opaque) {
     (void)opaque;
     if((LONG)GetCurrentThreadId()==InterlockedCompareExchange(&s_cpu_surface_thread,0,0)){cpu_surface_read(address,bytes);return;}
-    CpuSurfaceRequest request={0};request.address=address;request.bytes=bytes;request.status=-1;
+    CpuSurfaceRequest request={0};request.address=address;request.bytes=bytes;request.status=-1;request.queued_ms=GetTickCount64();
     request.done=CreateEventA(NULL,FALSE,FALSE,NULL);
     if(!request.done)cpu_surface_fail("CPU read event creation",E_FAIL);
     AcquireSRWLockExclusive(&s_cpu_surface_lock);
@@ -118,7 +122,15 @@ static void cpu_surface_request(u32 address,u32 bytes,void *opaque) {
     s_cpu_surface_tail=&request;ReleaseSRWLockExclusive(&s_cpu_surface_lock);
     extern void *cellGcm_fifo_kick_event(void);
     HANDLE kick=(HANDLE)cellGcm_fifo_kick_event();if(kick&&!SetEvent(kick))cpu_surface_fail("renderer kick",E_FAIL);
-    if(WaitForSingleObject(request.done,30000)!=WAIT_OBJECT_0 || request.status)cpu_surface_fail("CPU read synchronization",E_FAIL);
+    DWORD wait=WaitForSingleObject(request.done,30000);
+    DWORD wait_error=wait==WAIT_FAILED?GetLastError():0;
+    if(wait!=WAIT_OBJECT_0 || request.status) {
+        fprintf(stderr,"[CPUSURFACE] request address=%08X bytes=%u wait=%08lX error=%lu status=%d elapsed_ms=%llu requester=%lu renderer=%ld\n",
+            address,bytes,(unsigned long)wait,(unsigned long)wait_error,request.status,
+            (unsigned long long)(GetTickCount64()-request.queued_ms),
+            (unsigned long)GetCurrentThreadId(),s_cpu_surface_thread);
+        cpu_surface_fail("CPU read synchronization",E_FAIL);
+    }
     CloseHandle(request.done);
 }
 static void cpu_surface_init(void) {
