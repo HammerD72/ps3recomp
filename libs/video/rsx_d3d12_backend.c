@@ -41,6 +41,7 @@
 #include <dxgi1_6.h>
 #include <d3dcompiler.h>
 #include "rsx_d3d12_fault.h"
+#include "rsx_renderdoc_capture.h"
 #include "rsx_gpu_submission.h"
 #include "rsx_mrt_masks.h"
 #include "rsx_d3d12_mrt.h"
@@ -592,6 +593,7 @@ static HWND create_window(u32 width, u32 height, const char* title)
 static int init_d3d12(u32 width, u32 height)
 {
     HRESULT hr;
+    rdoc_init();
     rsx_gpu_fault_enable();
 
     /* Enable debug layer in debug builds */
@@ -2537,6 +2539,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     ID3D12PipelineState* pso = NULL;
     hr = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(
         s_d3d.device, &pd, &IID_ID3D12PipelineState, (void**)&pso);
+    if (SUCCEEDED(hr)) rdoc_name_pso(pso,fp_addr,vs_idx);
     const u32 diag_shader_id = SUCCEEDED(hr) ? scene_bound_shader(hlsl, pb, &pd) : 0;
     pb->lpVtbl->Release(pb);
     if (FAILED(hr)) {
@@ -5322,6 +5325,7 @@ skip_dump_consider: ;
             fprintf(stderr, "[D3D12] Present failed: 0x%08X\n", (unsigned)present_hr);
             abort();
         }
+        rdoc_present(s_d3d.device,s_d3d.hwnd);
         rsx_record_batch_presented(&s_record_batch);
     }
 
