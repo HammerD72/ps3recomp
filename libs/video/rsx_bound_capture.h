@@ -1,3 +1,6 @@
+#ifndef RSX_BOUND_VPTEX_COUNT
+#define RSX_BOUND_VPTEX_COUNT VP_TEX_SLOTS
+#endif
 /* Optional physical descriptor/source evidence. Payloads remain private.
  * Include after the timeline and address-table helpers, before srv_write_ex. */
 #ifndef RSX_BOUND_CAPTURE_H
@@ -147,7 +150,7 @@ static void scene_bound_inputs(u32 op, u32 base, unsigned units, const char* met
       for(int rt=0;rt<RSX_BOUND_OFFRT_COUNT;rt++)if(s_d3d.off_rt[rt].res==resource){
         known=1;state=s_d3d.off_rt[rt].st;break;
       }
-      if(!known)for(int t=0;t<VP_TEX_SLOTS;t++)if(s_d3d.vp_tex[t].res==resource){
+      if(!known)for(int t=0;t<RSX_BOUND_VPTEX_COUNT;t++)if(s_d3d.vp_tex[t].res==resource){
         known=1;state=D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;break;
       }
       #ifdef RSX_BOUND_INPUT_STATE
