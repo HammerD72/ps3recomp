@@ -42,6 +42,7 @@
 #include <d3dcompiler.h>
 #include "rsx_d3d12_fault.h"
 #include "rsx_renderdoc_capture.h"
+#include "rsx_capture_schedule.h"
 #include "rsx_gpu_submission.h"
 #include "rsx_mrt_masks.h"
 #include "rsx_d3d12_mrt.h"
@@ -5295,24 +5296,39 @@ skip_dump_consider: ;
      * present transition would matter -- the backbuffer is in PRESENT here and
      * is restored to PRESENT after each readback. */
     { const char* cap = getenv("RSX_CAP");
-      if (cap) {
-        static int s_cap_parsed = 0;
-        static u32 s_cap_start = 0, s_cap_count = 1, s_cap_stride = 1, s_cap_done = 0;
-        if (!s_cap_parsed) {
-            s_cap_parsed = 1;
+      const char* presented_arm = getenv("RSX_CAP_PRESENT_ARM_FILE");
+      if (cap || presented_arm) {
+        static int parsed = 0;
+        static rsx_capture_schedule s_cap;
+        if (!parsed) {
             u32 a = 0, b = 1, c = 1;
-            int n = sscanf(cap, "%u:%u:%u", &a, &b, &c);
-            s_cap_start  = (n >= 1 && a) ? a : 200;
-            s_cap_count  = (n >= 2 && b) ? b : 1;
-            s_cap_stride = (n >= 3 && c) ? c : 1;
+            int n = cap ? sscanf(cap, "%u:%u:%u", &a, &b, &c) : 0;
+            rsx_capture_schedule_init(&s_cap, (n >= 1 && a) ? a : 200,
+                cap ? ((n >= 2 && b) ? b : 1) : 0, (n >= 3 && c) ? c : 1);
+            parsed = 1;
         }
-        if (s_cap_done < s_cap_count) {
-            u32 target = s_cap_start + s_cap_done * s_cap_stride;
-            if (s_d3d.frame_count >= target && s_dbg_last_draws > 0) {
-                rsx_capture_frame(fi, s_dbg_last_draws, s_cap_done);
-                s_cap_done++;
+        if (presented_arm && !s_cap.presented_mode) {
+            DWORD attributes = GetFileAttributesA(presented_arm);
+            if (attributes != INVALID_FILE_ATTRIBUTES) {
+                const char* text = getenv("RSX_CAP_PRESENT_STRIDE");
+                char* end = NULL;
+                unsigned long stride = text ? strtoul(text, &end, 10) : 0;
+                if ((attributes & FILE_ATTRIBUTE_DIRECTORY) || !text || !*text || *end ||
+                    !rsx_capture_schedule_presented(&s_cap, RSX_CAPTURE_BURST_MAX, (u32)stride)) {
+                    fprintf(stderr, "[rsxcap] invalid presented phase marker/stride\n");
+                    abort();
+                }
+                fprintf(stderr, "[rsxcap] presented phase stride=%lu budget=%u next_index=%u\n",
+                    stride, RSX_CAPTURE_BURST_MAX, s_cap.index);
+            } else if (GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND) {
+                fprintf(stderr, "[rsxcap] presented phase query failed: %lu\n", (unsigned long)GetLastError());
+                abort();
             }
         }
+        u32 index;
+        if (rsx_capture_schedule_next(&s_cap, s_d3d.frame_count,
+                s_dbg_last_draws > 0, s_present_this_frame, &index))
+            rsx_capture_frame(fi, s_dbg_last_draws, index);
       } }
 
     /* Present */

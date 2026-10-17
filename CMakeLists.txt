@@ -734,3 +734,9 @@ if(PS3RECOMP_BUILD_TESTS OR BUILD_TESTING)
     target_include_directories(test_cpu_surface_hle PRIVATE include libs/video runtime/ppu)
     add_test(NAME cpu_surface_hle COMMAND test_cpu_surface_hle)
 endif()
+
+add_executable(test_rsx_capture_schedule tests/rsx_capture_schedule.c)
+target_include_directories(test_rsx_capture_schedule PRIVATE libs/video)
+add_test(NAME rsx_capture_schedule COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_SOURCE_DIR}/tests/check_rsx_capture_schedule.py $<TARGET_FILE:test_rsx_capture_schedule>)
+set_tests_properties(rsx_capture_schedule PROPERTIES TIMEOUT 30)
