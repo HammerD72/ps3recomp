@@ -40,6 +40,7 @@
 #include <dxgi1_4.h>
 #include <dxgi1_6.h>
 #include <d3dcompiler.h>
+#include "rsx_d3d12_fault.h"
 #include "rsx_mrt_masks.h"
 #include "rsx_d3d12_mrt.h"
 static u32 rsx_record_color_masks(const rsx_state* state)
@@ -569,6 +570,7 @@ static HWND create_window(u32 width, u32 height, const char* title)
 static int init_d3d12(u32 width, u32 height)
 {
     HRESULT hr;
+    rsx_gpu_fault_enable();
 
     /* Enable debug layer in debug builds */
     /* Debug layer: on in debug builds, or in any build when D3D12_DBG is set
@@ -648,6 +650,7 @@ static int init_d3d12(u32 width, u32 height)
     queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     hr = s_d3d.device->lpVtbl->CreateCommandQueue(
         s_d3d.device, &queue_desc, &IID_ID3D12CommandQueue, (void**)&s_d3d.cmd_queue);
+    if (SUCCEEDED(hr)) rsx_gpu_fault_name((ID3D12Object*)s_d3d.cmd_queue, L"RSX graphics queue");
     if (FAILED(hr)) {
         printf("[D3D12] ERROR: CreateCommandQueue failed\n");
         factory->lpVtbl->Release(factory);
@@ -789,6 +792,7 @@ static int init_d3d12(u32 width, u32 height)
         s_d3d.device, 0, D3D12_COMMAND_LIST_TYPE_DIRECT,
         s_d3d.cmd_allocators[0], NULL,
         &IID_ID3D12GraphicsCommandList, (void**)&s_d3d.cmd_list);
+    if (SUCCEEDED(hr)) rsx_gpu_fault_name((ID3D12Object*)s_d3d.cmd_list, L"RSX frame");
     if (FAILED(hr)) return -1;
 
     /* Close the command list (it starts in recording state) */

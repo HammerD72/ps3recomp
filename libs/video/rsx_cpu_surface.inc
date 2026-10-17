@@ -19,7 +19,7 @@ static u64 s_cpu_surface_fence_value;
 static int s_cpu_surface_live;
 static int s_cpu_surface_recording;
 static void cpu_surface_fail(const char *operation, HRESULT result) {
-    fprintf(stderr,"[CPUSURFACE] %s failed: 0x%08lX\n",operation,(unsigned long)result);abort();
+    fprintf(stderr,"[CPUSURFACE] %s failed: 0x%08lX\n",operation,(unsigned long)result);rsx_gpu_fault_report(s_d3d.device);abort();
 }
 #define CPU_SURFACE_HR(call) do { HRESULT _result=(call); if(FAILED(_result))cpu_surface_fail(#call,_result); } while(0)
 static void cpu_surface_fence_wait(void) {
@@ -139,6 +139,7 @@ static void cpu_surface_init(void) {
         &IID_ID3D12CommandAllocator,(void **)&s_cpu_surface_alloc));
     CPU_SURFACE_HR(s_d3d.device->lpVtbl->CreateCommandList(s_d3d.device,0,D3D12_COMMAND_LIST_TYPE_DIRECT,
         s_cpu_surface_alloc,NULL,&IID_ID3D12GraphicsCommandList,(void **)&s_cpu_surface_list));
+    rsx_gpu_fault_name((ID3D12Object*)s_cpu_surface_list,L"RSX CPU surface copy");
     CPU_SURFACE_HR(s_cpu_surface_list->lpVtbl->Close(s_cpu_surface_list));
     CPU_SURFACE_HR(s_d3d.device->lpVtbl->CreateFence(s_d3d.device,0,D3D12_FENCE_FLAG_NONE,&IID_ID3D12Fence,(void **)&s_cpu_surface_fence));
     s_cpu_surface_event=CreateEventA(NULL,FALSE,FALSE,NULL);if(!s_cpu_surface_event)cpu_surface_fail("GPU event creation",E_FAIL);
