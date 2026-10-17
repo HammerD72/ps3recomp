@@ -19,14 +19,14 @@ static ID3D12DescriptorHeap *rtv_heap, *dsv_heap;
 static ID3D12Resource* targets[3];
 static ID3D12Resource* readback;
 static ID3D12RootSignature* root;
-static ID3D12PipelineState *pipeline, *stencil_pipeline;
+static ID3D12PipelineState *pipeline, *stencil_pipeline, *color_pipeline;
 static ID3D12InfoQueue* messages;
 static rsx_d3d12_depth_cache depths;
 static UINT rtv_step, dsv_step;
 static UINT64 fence_value;
 static HANDLE event_handle;
 static UINT slots[2];
-static int legacy, last_target = -1;
+static int legacy, eager_depth, last_target = -1;
 static unsigned checks, failures;
 
 static void check(HRESULT result, const char* operation)
@@ -100,13 +100,13 @@ static void draw(UINT target, UINT zeta, float red, float green, float blue, flo
     D3D12_VIEWPORT viewport = {0, 0, 32, 32, 0, 1};
     D3D12_RECT scissor = {0, 0, 32, 32};
     float constants[4] = {red, green, blue, z};
-    if (legacy && last_target != (int)target)
+    if (legacy && stencil >= 0 && last_target != (int)target)
         clear_depth(zeta, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1, 0);
     last_target = (int)target;
-    list->lpVtbl->SetPipelineState(list, stencil ? stencil_pipeline : pipeline);
+    list->lpVtbl->SetPipelineState(list, stencil < 0 ? color_pipeline : stencil ? stencil_pipeline : pipeline);
     list->lpVtbl->SetGraphicsRootSignature(list, root);
     list->lpVtbl->SetGraphicsRoot32BitConstants(list, 0, 4, constants, 0);
-    list->lpVtbl->OMSetRenderTargets(list, 1, &color, FALSE, &zview);
+    list->lpVtbl->OMSetRenderTargets(list, 1, &color, FALSE, stencil < 0 ? NULL : &zview);
     list->lpVtbl->OMSetStencilRef(list, 7);
     list->lpVtbl->RSSetViewports(list, 1, &viewport);
     list->lpVtbl->RSSetScissorRects(list, 1, &scissor);
@@ -156,6 +156,7 @@ int main(int argc, char** argv)
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--hardware")) hardware = 1;
         else if (!strcmp(argv[i], "--legacy")) legacy = 1;
+        else if (!strcmp(argv[i], "--eager-depth")) eager_depth = 1;
         else return 2;
     }
     ID3D12Debug* debug = NULL;
@@ -195,6 +196,33 @@ int main(int argc, char** argv)
         (void**)&dsv_heap), "DSV heap");
     rtv_step = device->lpVtbl->GetDescriptorHandleIncrementSize(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     dsv_step = device->lpVtbl->GetDescriptorHandleIncrementSize(device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+    /* Distinct stale zeta values in color-only draws must not consume slots.
+     * The eager control reproduces the production failure at the129th key. */
+    rsx_d3d12_depth_cache unused = {0};
+    HRESULT allocation = S_OK;
+    for (UINT i = 0; i <= RSX_D3D12_DEPTH_CAPACITY; ++i) {
+        if (!eager_depth && !rsx_d3d12_depth_required(0, 0, (1u << 4))) continue;
+        UINT slot;
+        allocation = rsx_d3d12_depth_prepare(&unused, device, dsv_heap, dsv_step,
+            0x5000 + i * 0x100, 32, 32, &slot);
+        if (FAILED(allocation)) break;
+    }
+    ++checks;
+    int unused_ok = unused.count == 0 && SUCCEEDED(allocation);
+    failures += !unused_ok;
+    printf("%s color-only-stale-zeta count=%u HRESULT=%08lX\n",
+        unused_ok ? "PASS" : "FAIL", unused.count, (unsigned long)allocation);
+    rsx_d3d12_depth_release(&unused);
+    ++checks;
+    int predicate_ok = rsx_d3d12_depth_required(0, 0, (1u << 0)) &&
+        rsx_d3d12_depth_required(0, 0, (1u << 5)) &&
+        !rsx_d3d12_depth_required(0, 0, (1u << 4)) &&
+        !rsx_d3d12_depth_required(0, 0, 0) &&
+        rsx_d3d12_depth_required(1, 1, 0) &&
+        rsx_d3d12_depth_required(1, 2, 0) &&
+        !rsx_d3d12_depth_required(1, 0xF0, (1u << 0) | (1u << 5));
+    failures += !predicate_ok;
+    printf("%s explicit-clear-versus-test-enables\n", predicate_ok ? "PASS" : "FAIL");
     check(rsx_d3d12_depth_prepare(&depths, device, dsv_heap, dsv_step, 0x1000, 32, 32, &slots[0]), "depth A");
     check(rsx_d3d12_depth_prepare(&depths, device, dsv_heap, dsv_step, 0x2000, 32, 32, &slots[1]), "depth B");
     D3D12_HEAP_PROPERTIES properties = {0};
@@ -272,6 +300,10 @@ int main(int argc, char** argv)
     state.DepthStencilState.StencilEnable = TRUE;
     check(device->lpVtbl->CreateGraphicsPipelineState(device, &state,
         &IID_ID3D12PipelineState, (void**)&stencil_pipeline), "stencil pipeline");
+    state.DepthStencilState.StencilEnable = FALSE;
+    state.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    check(device->lpVtbl->CreateGraphicsPipelineState(device, &state,
+        &IID_ID3D12PipelineState, (void**)&color_pipeline), "color-only pipeline");
     clear_depth(0, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1, 7);
     clear_depth(1, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1, 0);
     draw(0, 0, 1, 0, 0, .2f, 0);
@@ -316,6 +348,8 @@ int main(int argc, char** argv)
     draw(0, 0, 0, 0, 1, 0, 1);
     pixel(0, 0xFFFF0000, "depth-only clears preserve the decoded stencil");
     rsx_set_backend(NULL);
+    draw(0, 0, 0, 1, 0, .5f, -1);
+    pixel(0, 0xFF00FF00, "color-only-null-DSV");
     if (messages) {
         UINT64 count = messages->lpVtbl->GetNumStoredMessages(messages);
         for (UINT64 i = 0; i < count; ++i) {
