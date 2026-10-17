@@ -504,6 +504,9 @@ void cellPad_poll(void)
 
 s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
 {
+    static unsigned held_mask = 0;
+    static int held_n = 0;
+    int pad_file_applied = 0;
     { static int _once = 0;
       if (!_once++) printf("[cellPad] GetData polling begins (port %u)\n", port_no); }
     if (!s_pad_initialized)
@@ -671,7 +674,6 @@ skip_inject: ;
      *                            # long hold; the default is 40)
      */
     { static int s_pf = -1; static char pf_path[512];
-      static unsigned held_mask = 0; static int held_n = 0;
       if (s_pf < 0) { const char* e = getenv("PAD_FILE");
                       s_pf = (e && *e) ? 1 : 0;
                       if (s_pf) { strncpy(pf_path, e, sizeof pf_path - 1); pf_path[sizeof pf_path - 1] = 0; } }
@@ -691,7 +693,7 @@ skip_inject: ;
                   if (held_n > 0) { FILE* w = fopen(pf_path, "wb"); if (w) fclose(w); }
               }
           }
-          if (held_n > 0) { held_n--;
+          if (held_n > 0) { pad_file_applied = 1;
               data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] |= (u16)(held_mask & 0xFF);
               data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] |= (u16)((held_mask >> 8) & 0xFF); }
       } }
@@ -829,6 +831,9 @@ emit:
             else                        s_data_fresh[port_no] = 0;
         }
     }
+    /* A drain call does not deliver the synthetic button. Count only reports;
+     * keep injection before pressure synthesis so both representations agree. */
+    if (pad_file_applied && data->len > 0) --held_n;
     {
         unsigned int ea = (unsigned int)(uintptr_t)data_guest;
         vm_write32((unsigned long long)ea + 0, (unsigned int)data->len);   /* len (s32) */
