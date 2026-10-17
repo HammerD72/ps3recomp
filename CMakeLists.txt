@@ -603,6 +603,15 @@ if(PS3RECOMP_BUILD_TESTS OR BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_rsx_fp_pack.py" "$<TARGET_FILE:test_rsx_fp_pack_gpu>")
         set_tests_properties(rsx_fp_pack PROPERTIES TIMEOUT 180)
 
+        add_executable(test_rsx_fp_source_sign_gpu tests/rsx_fp_source_sign_gpu.cpp
+            libs/video/rsx_fp_decompiler.c)
+        target_include_directories(test_rsx_fp_source_sign_gpu PRIVATE include libs/video)
+        target_compile_features(test_rsx_fp_source_sign_gpu PRIVATE cxx_std_17)
+        target_link_libraries(test_rsx_fp_source_sign_gpu PRIVATE d3d11 d3dcompiler)
+        add_test(NAME rsx_fp_source_sign COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_rsx_fp_source_sign.py" "$<TARGET_FILE:test_rsx_fp_source_sign_gpu>")
+        set_tests_properties(rsx_fp_source_sign PROPERTIES TIMEOUT 180)
+
         add_executable(test_rsx_depth_surfaces_gpu tests/rsx_depth_surfaces_gpu.c
             libs/video/rsx_commands.c)
         target_include_directories(test_rsx_depth_surfaces_gpu PRIVATE include libs/video)

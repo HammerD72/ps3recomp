@@ -164,7 +164,7 @@ int main(void)
         put_word(prog + 8, 0);
         put_word(prog + 12, 0);
         rsx_fp_decompile(prog, sizeof(prog), CTRL_32BIT, hlsl, sizeof(hlsl));
-        check("neg_abs", hlsl, "-(abs((r[1]).xyzw))");
+        check("neg_abs", hlsl, "asfloat(asuint((r[1]).xyzw) | 0x80000000u)");
     }
 
     /* Test 6: the export register file follows SHADER_CONTROL, not whichever
