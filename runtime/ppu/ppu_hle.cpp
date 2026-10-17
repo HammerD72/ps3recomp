@@ -22,6 +22,7 @@
 #include <stdlib.h>       /* getenv */
 #include <stdint.h>
 #include <stdio.h>
+#include "ppu_pad_trace.h"
 #include <stdlib.h>       /* getenv, atoi (boot trace) */
 
 /* Single flat NID -> handler table (all modules share it; resolution is by
@@ -634,7 +635,10 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
             g_last_hle_name = g_ctx[i].name;
             { unsigned t = (unsigned)ctx->thread_id;
               if (t < PS3_HLE_INFLIGHT_MAX) g_hle_inflight[t] = g_ctx[i].name; }
+            const uint32_t pad_port=(uint32_t)ctx->gpr[3], pad_address=(uint32_t)ctx->gpr[4];
             g_ctx[i].fn(ctx);
+            extern uint8_t* vm_base;
+            ppu_pad_trace(g_ctx[i].name,ctx->thread_id,(uint32_t)ctx->lr,pad_port,pad_address,ctx->gpr[3],vm_base,ctx->gpr[2],ctx->gpr[30]);
             { unsigned t = (unsigned)ctx->thread_id;
               if (t < PS3_HLE_INFLIGHT_MAX) g_hle_inflight[t] = nullptr; }
             return;
@@ -720,9 +724,12 @@ extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx)
                     (uint32_t)ctx->gpr[3],(uint32_t)ctx->gpr[4],(uint32_t)ctx->gpr[5],
                     (uint32_t)ctx->gpr[6],(uint32_t)ctx->gpr[7],(uint32_t)ctx->gpr[8]);
     }
+    const uint32_t pad_trace_port=(uint32_t)ctx->gpr[3], pad_trace_address=(uint32_t)ctx->gpr[4];
     hle_generic fn = (hle_generic)e->handler;
     uint64_t r = fn(ctx->gpr[3], ctx->gpr[4], ctx->gpr[5], ctx->gpr[6],
                     ctx->gpr[7], ctx->gpr[8], ctx->gpr[9], ctx->gpr[10]);
+    extern uint8_t* vm_base;
+    ppu_pad_trace(e->name,ctx->thread_id,(uint32_t)ctx->lr,pad_trace_port,pad_trace_address,r,vm_base,ctx->gpr[2],ctx->gpr[30]);
     ctx->gpr[3] = r;   /* PPC return value */
     /* PS3_HLE_PTRCHECK: the guest stores HLE return values as guest pointers, so
      * an HLE returning a value outside guest RAM (>= 0x10000000) that is not a
