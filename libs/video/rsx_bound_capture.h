@@ -62,25 +62,28 @@ static void scene_bound_copy(ID3D12Resource* resource, D3D12_RESOURCE_STATES sta
       D3D12_RESOURCE_DESC d;resource->lpVtbl->GetDesc(resource,&d);
       if(d.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D || d.Width>4096 || d.Height>4096 ||
          d.DepthOrArraySize!=1 || d.MipLevels!=1 || d.SampleDesc.Count!=1 ||
-         (d.Flags&D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL))
+         ((output<2) && (d.Flags&D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)))
          scene_timeline_fail("input capture requires single-mip single-layer color 2D resource");
+      const UINT subresource=output>=2 ? (UINT)(output-2) : 0;
+      if(output>=2 && (output>3 || d.Format!=DXGI_FORMAT_D24_UNORM_S8_UINT))
+        scene_timeline_fail("depth capture requires D24S8 plane zero or one");
       D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint;
       UINT rows=0;UINT64 row_bytes=0,bytes=0;
-      s_d3d.device->lpVtbl->GetCopyableFootprints(s_d3d.device,&d,0,1,0,&footprint,&rows,&row_bytes,&bytes);
+      s_d3d.device->lpVtbl->GetCopyableFootprints(s_d3d.device,&d,subresource,1,0,&footprint,&rows,&row_bytes,&bytes);
       if(!bytes || bytes+s_bound_input_bytes+s_bound_file_bytes>128ull*1024*1024)
         scene_timeline_fail("input capture budget exceeded");
       BoundInput* b=&s_bound_input[s_bound_input_n];
-      int n=output ? snprintf(b->path,sizeof(b->path),"%s.output.raw",metadata) : snprintf(b->path,sizeof(b->path),"%s.t%u.raw",metadata,u);
+      int n=output>=2 ? snprintf(b->path,sizeof(b->path),"%s.depth_plane%u.raw",metadata,subresource) : output ? snprintf(b->path,sizeof(b->path),"%s.output.raw",metadata) : snprintf(b->path,sizeof(b->path),"%s.t%u.raw",metadata,u);
       if(n<0 || (size_t)n>=sizeof(b->path))scene_timeline_fail("input path too long");
       char layout[576];n=snprintf(layout,sizeof(layout),"%s.layout",b->path);
       if(n<0 || (size_t)n>=sizeof(layout) || GetFileAttributesA(layout)!=INVALID_FILE_ATTRIBUTES)
         scene_timeline_fail("input layout path invalid/existing");
       FILE* f=fopen(layout,"wb");if(!f)scene_timeline_fail("input layout open failed");
-      fprintf(f,"op=%u unit=%u resource_dxgi=%u srv_dxgi=%u mapping=%08X width=%llu height=%u pitch=%u rows=%u row_bytes=%llu offset=%llu bytes=%llu prior_state=%u\n",
+      fprintf(f,"op=%u unit=%u resource_dxgi=%u srv_dxgi=%u mapping=%08X width=%llu height=%u pitch=%u rows=%u row_bytes=%llu offset=%llu bytes=%llu prior_state=%u subresource=%u footprint_dxgi=%u\n",
         op,u,(unsigned)d.Format,format,mapping,
         (unsigned long long)d.Width,d.Height,footprint.Footprint.RowPitch,rows,
         (unsigned long long)row_bytes,(unsigned long long)footprint.Offset,
-        (unsigned long long)bytes,(unsigned)state);
+        (unsigned long long)bytes,(unsigned)state,subresource,(unsigned)footprint.Footprint.Format);
       if(ferror(f)||fclose(f))scene_timeline_fail("input layout write/close failed");
       D3D12_HEAP_PROPERTIES hp={0};hp.Type=D3D12_HEAP_TYPE_READBACK;
       D3D12_RESOURCE_DESC bd={0};bd.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;bd.Width=bytes;
@@ -92,7 +95,7 @@ static void scene_bound_copy(ID3D12Resource* resource, D3D12_RESOURCE_STATES sta
       barrier.Transition.pResource=resource;barrier.Transition.Subresource=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
       barrier.Transition.StateBefore=state;barrier.Transition.StateAfter=D3D12_RESOURCE_STATE_COPY_SOURCE;
       if(state!=D3D12_RESOURCE_STATE_COPY_SOURCE)s_d3d.cmd_list->lpVtbl->ResourceBarrier(s_d3d.cmd_list,1,&barrier);
-      D3D12_TEXTURE_COPY_LOCATION src={0},dst={0};src.pResource=resource;src.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+      D3D12_TEXTURE_COPY_LOCATION src={0},dst={0};src.pResource=resource;src.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;src.SubresourceIndex=subresource;
       dst.pResource=b->readback;dst.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;dst.PlacedFootprint=footprint;
       s_d3d.cmd_list->lpVtbl->CopyTextureRegion(s_d3d.cmd_list,&dst,0,0,0,&src,NULL);
       if(state!=D3D12_RESOURCE_STATE_COPY_SOURCE){barrier.Transition.StateBefore=D3D12_RESOURCE_STATE_COPY_SOURCE;
@@ -124,6 +127,9 @@ static void scene_bound_inputs(u32 op, u32 base, unsigned units, const char* met
       if(!known)for(int t=0;t<VP_TEX_SLOTS;t++)if(s_d3d.vp_tex[t].res==resource){
         known=1;state=D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;break;
       }
+      #ifdef RSX_BOUND_INPUT_STATE
+      if(!known)known=RSX_BOUND_INPUT_STATE(resource,&state);
+      #endif
       if(!known)scene_timeline_fail("input resource state provenance unavailable");
       scene_bound_copy(resource,state,op,u,s_bound_srv[base+u].format,s_bound_srv[base+u].mapping,metadata,0);
     }
@@ -197,6 +203,14 @@ static void scene_bound_draw(u32 op, u32 base, unsigned units, ID3D12PipelineSta
     fprintf(f,"vertices=%u vb_offset=%u stride=256 topology=%u\n",dr->vertex_count,dr->vb_byte_offset,(unsigned)dr->topology);
     if(ferror(f) || fclose(f))scene_timeline_fail("bound metadata write/close failed");
     scene_bound_inputs(op,base,units,path);
+#ifdef RSX_BOUND_DEPTH_RESOURCE
+    if(getenv("RSX_BOUND_INPUT_MASK")){
+      ID3D12Resource* depth=RSX_BOUND_DEPTH_RESOURCE(dr);
+      for(unsigned plane=0;plane<2;plane++)
+        scene_bound_copy(depth,D3D12_RESOURCE_STATE_DEPTH_WRITE,op,0xFFFFFFFEu,
+          DXGI_FORMAT_D24_UNORM_S8_UINT,0,path,2+(int)plane);
+    }
+#endif
     if(getenv("RSX_BOUND_INPUT_MASK")){
       if(s_bound_output_pending)scene_timeline_fail("selected output was not copied");
       memcpy(s_bound_output_metadata,path,strlen(path)+1);
