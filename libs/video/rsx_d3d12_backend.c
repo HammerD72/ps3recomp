@@ -5092,14 +5092,18 @@ skip_dump_consider: ;
                 s_d3d.device, &IID_ID3D12InfoQueue, (void**)&iq)) && iq) {
             UINT64 n = iq->lpVtbl->GetNumStoredMessages(iq);
             static int _printed = 0;
-            for (UINT64 mi = 0; mi < n && _printed < 80; mi++) {
+            for (UINT64 mi = 0; mi < n; mi++) {
                 SIZE_T len = 0;
                 iq->lpVtbl->GetMessage(iq, mi, NULL, &len);
                 D3D12_MESSAGE* m = (D3D12_MESSAGE*)malloc(len);
                 if (m && SUCCEEDED(iq->lpVtbl->GetMessage(iq, mi, m, &len))) {
-                    fprintf(stderr, "[D3D12-IQ][sev=%d id=%d] %s\n",
-                            (int)m->Severity, (int)m->ID, m->pDescription);
-                    _printed++;
+                    int critical = m->Severity <= D3D12_MESSAGE_SEVERITY_ERROR;
+                    if (critical || _printed < 80) {
+                        fprintf(stderr, "[D3D12-IQ][sev=%d id=%d] %s\n",
+                                (int)m->Severity, (int)m->ID, m->pDescription);
+                        if (!critical && ++_printed == 80)
+                            fprintf(stderr, "[D3D12-IQ] Non-critical quota reached; ERROR/CORRUPTION remain uncapped\n");
+                    }
                 }
                 free(m);
             }
