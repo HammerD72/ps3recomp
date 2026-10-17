@@ -594,6 +594,13 @@ if(PS3RECOMP_BUILD_TESTS OR BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_rsx_mrt_masks.py" "$<TARGET_FILE:test_rsx_mrt_masks_gpu>")
         set_tests_properties(rsx_mrt_masks_gpu PROPERTIES TIMEOUT 90)
 
+        add_executable(test_rsx_depth_alias_gpu tests/rsx_depth_alias_gpu.c)
+        target_include_directories(test_rsx_depth_alias_gpu PRIVATE libs/video)
+        target_link_libraries(test_rsx_depth_alias_gpu PRIVATE d3d12 dxgi dxguid d3dcompiler)
+        add_test(NAME rsx_depth_alias COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_rsx_depth_alias.py" "$<TARGET_FILE:test_rsx_depth_alias_gpu>")
+        set_tests_properties(rsx_depth_alias PROPERTIES TIMEOUT 180)
+
         add_executable(test_rsx_address_gpu tests/rsx_address_d3d12_gpu.cpp)
         target_include_directories(test_rsx_address_gpu PRIVATE libs/video)
         target_link_libraries(test_rsx_address_gpu PRIVATE d3d12 dxgi d3dcompiler)
