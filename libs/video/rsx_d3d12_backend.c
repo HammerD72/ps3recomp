@@ -1337,6 +1337,37 @@ static int vp_upload_retire(void* context)
         s_d3d.fence->lpVtbl->GetCompletedValue(s_d3d.fence) >=
         s_d3d.fence_values[s_d3d.frame_index];
 }
+
+#include "rsx_shader_cache.h"
+static rsx_shader_cache s_fp_bytecode;
+static u64 s_fp_bytecode_hits,s_fp_bytecode_misses,s_fp_bytecode_failures,s_fp_bytecode_refusals;
+static void fp_blob_retain(void* context,void* pointer)
+{ (void)context;ID3DBlob* b=(ID3DBlob*)pointer;b->lpVtbl->AddRef(b); }
+static void fp_blob_release(void* context,void* pointer)
+{ (void)context;ID3DBlob* b=(ID3DBlob*)pointer;b->lpVtbl->Release(b); }
+static const rsx_shader_blob_ops s_fp_blob_ops={NULL,fp_blob_retain,fp_blob_release};
+static HRESULT fp_compile_cached(u32 fp,const char* source,ID3DBlob** blob,ID3DBlob** error)
+{
+    rsx_shader_key key={source,strlen(source),"guest_fp","main","ps_5_0",0,0};
+    *error=NULL;*blob=(ID3DBlob*)rsx_shader_cache_get(&s_fp_bytecode,&key,&s_fp_blob_ops);
+    if(*blob){s_fp_bytecode_hits++;return S_OK;}
+    s_fp_bytecode_misses++;
+    ULONGLONG start=GetTickCount64();
+    HRESULT hr=D3DCompile(source,key.bytes,key.name,NULL,NULL,key.entry,key.target,
+                          key.flags1,key.flags2,blob,error);
+    ULONGLONG elapsed=GetTickCount64()-start;
+    if(perf_on()&&elapsed>=250)
+        fprintf(stderr,"[FPCOMPILE] fp=%08X elapsed_ms=%llu tick=%llu source_bytes=%zu cached=%u\n",
+                fp,(unsigned long long)elapsed,(unsigned long long)start,key.bytes,s_fp_bytecode.count);
+    if(FAILED(hr))s_fp_bytecode_failures++;
+    if(SUCCEEDED(hr)&&*blob && !rsx_shader_cache_put(&s_fp_bytecode,&key,*blob,
+            (*blob)->lpVtbl->GetBufferSize(*blob),&s_fp_blob_ops)) {
+        s_fp_bytecode_refusals++;
+        fprintf(stderr,"[FPCACHE] Successful fp=%08X bytecode not retained: allocation/budget refusal\n",fp);
+    }
+    return hr;
+}
+
 #include "rsx_gpu_references.h"
 static rsx_gpu_references s_gpu_pso_refs;
 static void gpu_pso_add(void *context,void *object) {
@@ -2417,8 +2448,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
         abort();
     }
     ID3DBlob* pb = NULL; ID3DBlob* e = NULL;
-    HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "guest_fp", NULL, NULL,
-                            "main", "ps_5_0", 0, 0, &pb, &e);
+    HRESULT hr = fp_compile_cached(fp_addr, hlsl, &pb, &e);
     if (FAILED(hr) || !pb) {
         scene_bound_failed_shader(fp_addr,hlsl,e);
         static int _e2=0; if (_e2++<16)
@@ -4938,6 +4968,10 @@ static void render_frame(void)
         if (s_t_prev > 0.0) s_perf_frame += now - s_t_prev;
         s_t_prev = now;
         if (++s_n % 20 == 0) {
+            fprintf(stderr,"[FPBYTECODE] hits=%llu misses=%llu failures=%llu refusals=%llu entries=%u bytes=%zu\n",
+                    (unsigned long long)s_fp_bytecode_hits,(unsigned long long)s_fp_bytecode_misses,
+                    (unsigned long long)s_fp_bytecode_failures,(unsigned long long)s_fp_bytecode_refusals,
+                    s_fp_bytecode.count,s_fp_bytecode.bytes);
             double fr = s_perf_frame > 0 ? s_perf_frame : 1;
             fprintf(stderr, "[PERF] %.2f fps | tex %.2fs (%.0f%%, %d calls) | vtx %.2fs"
                             " (%.0f%%, %.0fk verts) | render_frame %.2fs (%.0f%%)"
@@ -6902,6 +6936,7 @@ void rsx_d3d12_backend_shutdown(void)
     cpu_surface_shutdown();
 
     address_retire();
+    rsx_shader_cache_clear(&s_fp_bytecode,&s_fp_blob_ops);
 
     /* Release D3D12 resources */
     if (s_d3d.vertex_buffer) {
