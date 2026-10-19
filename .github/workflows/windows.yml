@@ -56,6 +56,27 @@ jobs:
       - name: Build
         run: cmake --build build
 
+      - name: Build Windows Vulkan host and reject missing guest translation
+        shell: pwsh
+        run: |
+          $deps = Join-Path $env:RUNNER_TEMP 'ps3recomp-vulkan'
+          New-Item -ItemType Directory -Force -Path $deps | Out-Null
+          $headers = Join-Path $deps 'headers.tar.gz'
+          Invoke-WebRequest 'https://codeload.github.com/KhronosGroup/Vulkan-Headers/tar.gz/6802bb4733b63ed5efd3adb308a6c885ef180ea1' -OutFile $headers
+          if ((Get-FileHash $headers -Algorithm SHA256).Hash -ne '9044fbb356160e43201dc2094acb44c8a906722a63a35f48fc0f051579db9bb6') { throw 'Vulkan-Headers digest mismatch' }
+          tar -xf $headers -C $deps
+          if ($LASTEXITCODE) { throw 'Vulkan-Headers extraction failed' }
+          $sdl = Join-Path $deps 'sdl2.zip'
+          Invoke-WebRequest 'https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-devel-2.32.10-VC.zip' -OutFile $sdl
+          if ((Get-FileHash $sdl -Algorithm SHA256).Hash -ne 'af347939395a58b365846aaea27391e69f9ec9d4dd650d6ac40802159b418a6e') { throw 'SDL2 digest mismatch' }
+          Expand-Archive -LiteralPath $sdl -DestinationPath $deps -Force
+          cmake -S . -B build-vulkan -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DPS3RECOMP_RSX_VULKAN=ON -DPS3RECOMP_BUILD_TESTS=ON -DCMAKE_DISABLE_FIND_PACKAGE_glslang=ON "-DPS3RECOMP_VULKAN_INCLUDE_DIR=$deps/Vulkan-Headers-6802bb4733b63ed5efd3adb308a6c885ef180ea1/include" "-DSDL2_DIR=$deps/SDL2-2.32.10/cmake"
+          if ($LASTEXITCODE) { throw 'Windows Vulkan configure failed' }
+          cmake --build build-vulkan --parallel 4 --target ps3recomp_host
+          if ($LASTEXITCODE) { throw 'Windows Vulkan host build failed' }
+          ctest --test-dir build-vulkan -R '^rsx_vulkan_translation_required$' --no-tests=error --output-on-failure
+          if ($LASTEXITCODE) { throw 'Missing-translation rejection contract failed' }
+
       - name: Memory allocation and FIFO trace regressions
         run: |
           cmake -S . -B build -DPS3RECOMP_BUILD_TESTS=ON

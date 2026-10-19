@@ -73,7 +73,11 @@
 #include "../../libs/input/cellPad.h"
 
 #include <ps3emu/guest_call.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <pthread.h>
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1000,7 +1004,12 @@ static int    g_thread_ran     = 0;
 
 static size_t host_self_stack_bytes(void)
 {
-#if defined(__APPLE__)
+#if defined(_WIN32)
+    MEMORY_BASIC_INFORMATION info;
+    if (VirtualQuery(&info, &info, sizeof info) != sizeof info) return 0;
+    const NT_TIB* tib = (const NT_TIB*)NtCurrentTeb();
+    return (size_t)((uintptr_t)tib->StackBase - (uintptr_t)info.AllocationBase);
+#elif defined(__APPLE__)
     return pthread_get_stacksize_np(pthread_self());
 #elif defined(__GLIBC__) || defined(__linux__)
     pthread_attr_t a;
@@ -1145,8 +1154,12 @@ static int run_audio_pad_check(void)
          * frame loop would. No controller is expected to be attached. */
         for (int i = 0; i < 30; i++) {
             cellPad_poll();
+#ifdef _WIN32
+            Sleep(2);
+#else
             struct timespec ts = { 0, 2 * 1000 * 1000 };
             nanosleep(&ts, NULL);
+#endif
         }
 
         r = cellPadEnd();

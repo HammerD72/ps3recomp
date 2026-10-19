@@ -1,7 +1,7 @@
 /*
  * ps3recomp - Vulkan RSX Backend
  *
- * The Linux renderer the README calls "the obvious target". Same host-facing
+ * The Windows/Linux Vulkan renderer. Same host-facing
  * entry points and test hooks as the Metal and headless null backends, so
  * runtime/host/host_posix.c drives it unchanged.
  *
@@ -21,7 +21,7 @@
  * Rendering is offscreen; a present reads the frame back (the host's pixel
  * checks), optionally dumps it, and optionally shows it in a window.
  *
- * Vulkan is loaded at run time (dlopen of libvulkan.so.1), not linked, so:
+ * Vulkan is loaded at run time (LoadLibrary / dlopen), not linked, so:
  *   - building needs only the Vulkan headers, not a target-arch libvulkan
  *     (which is what makes cross-compiling for aarch64 straightforward);
  *   - a machine with no Vulkan loader fails init() cleanly instead of failing

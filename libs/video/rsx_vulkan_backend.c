@@ -38,8 +38,6 @@
  * with spaces.
  */
 
-#ifndef _WIN32
-
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 
@@ -53,12 +51,19 @@
 #include "vulkan/rsx_vk_fallback_vert.spv.h"
 #include "vulkan/rsx_vk_fallback_frag.spv.h"
 
-/* SDL2 is already required off Windows (cellPad, cellAudio); here it only
- * opens the optional window. Same include style as those two. */
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_vulkan.h>
+/* SDL2 also serves cellPad/cellAudio off Windows. Imported include paths
+ * cover both the system package and the Windows VC development package. */
+#include <SDL.h>
+#include <SDL_vulkan.h>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -231,6 +236,15 @@ static vk_state s_vk;
  * -------------------------------------------------------------------------*/
 static int vk_load_library(void)
 {
+#ifdef _WIN32
+    s_vk.lib = (void*)LoadLibraryExW(L"vulkan-1.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!s_vk.lib) {
+        VK_LOG("no system Vulkan loader found (error %lu)\n", (unsigned long)GetLastError());
+        return -1;
+    }
+    pvkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)
+        GetProcAddress((HMODULE)s_vk.lib, "vkGetInstanceProcAddr");
+#else
     static const char* names[] = { "libvulkan.so.1", "libvulkan.so" };
     for (size_t i = 0; i < sizeof names / sizeof names[0] && !s_vk.lib; i++)
         s_vk.lib = dlopen(names[i], RTLD_NOW | RTLD_LOCAL);
@@ -240,6 +254,7 @@ static int vk_load_library(void)
     }
     pvkGetInstanceProcAddr =
         (PFN_vkGetInstanceProcAddr)dlsym(s_vk.lib, "vkGetInstanceProcAddr");
+#endif
     if (!pvkGetInstanceProcAddr) { VK_LOG("libvulkan has no vkGetInstanceProcAddr\n"); return -1; }
 #define LOAD_G(name) \
     if (!(p##name = (PFN_##name)pvkGetInstanceProcAddr(VK_NULL_HANDLE, #name))) \
@@ -1637,6 +1652,8 @@ static void vk_window_drop(const char* why)
 static void vk_window_open(const char* title)
 {
     if (!vk_env_on("PS3RECOMP_VK_WINDOW")) return;
+    /* The embedding executable owns main; SDL2main is not linked. */
+    SDL_SetMainReady();
     if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
         VK_LOG("window disabled, continuing headless: SDL video init failed: %s\n", SDL_GetError());
         return;
@@ -3329,8 +3346,9 @@ static int vk_init_all(u32 width, u32 height, const char* title)
     if (vk_create_render_pass()) return -1;
     if (vk_create_pipeline_objects()) return -1;
     if (vk_guest_init()) {
-        VK_LOG("guest programs: setup failed, fixed-function path only\n");
+        VK_LOG("guest programs: setup failed\n");
         vk_guest_shutdown();
+        return -1;
     }
 
     /* Both targets UNDEFINED -> GENERAL once. Colour starts opaque black so a
@@ -3361,6 +3379,11 @@ static int vk_init_all(u32 width, u32 height, const char* title)
 int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
 {
     memset(&s_vk, 0, sizeof s_vk);
+    const char* requested = getenv("PS3RECOMP_VK_GUEST_PROGRAMS");
+    if (requested && requested[0] && requested[0] != '0' && !rsx_hlsl_to_spirv_available()) {
+        VK_LOG("guest programs requested but HLSL to SPIR-V translation is unavailable\n");
+        return -1;
+    }
     if (vk_init_all(width, height, title)) {
         rsx_vulkan_backend_shutdown();
         return -1;
@@ -3427,7 +3450,11 @@ void rsx_vulkan_backend_shutdown(void)
         pvkDestroyDevice(s_vk.device, NULL);
     }
     if (s_vk.instance && pvkDestroyInstance) pvkDestroyInstance(s_vk.instance, NULL);
+#ifdef _WIN32
+    if (s_vk.lib) FreeLibrary((HMODULE)s_vk.lib);
+#else
     if (s_vk.lib) dlclose(s_vk.lib);
+#endif
     free(s_vk.cpu_verts);
     memset(&s_vk, 0, sizeof s_vk);
 }
@@ -3467,5 +3494,3 @@ int rsx_vulkan_backend_depth_bounds(void)
 {
     return s_vk.eng_active && s_vk.depth_bounds_ok;
 }
-
-#endif /* !_WIN32 */

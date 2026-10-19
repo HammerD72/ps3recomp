@@ -124,3 +124,11 @@ uint32_t g_spu_image_span = 0;
 void ppu_dump_bctrl_ring(uint32_t a, const char* tag) { (void)a; (void)tag; }
 uint32_t ps3_spu_image_source_ea(uint32_t img_ea) { return img_ea; }
 
+#ifdef _WIN32
+/* The authored host has no lifted PPU symbols. The Windows SPU-import
+ * backtrace reader still requires its diagnostic symbol-table contract. */
+struct lv2_bt_fentry { uint64_t addr; void* func; const char* name; };
+const struct lv2_bt_fentry function_table[1] = { { 0, NULL, NULL } };
+const uint64_t function_table_count = 0;
+#endif
+

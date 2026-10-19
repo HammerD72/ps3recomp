@@ -164,3 +164,20 @@ Standalone SPU oracle/IRET checks and combined platform CI are recorded on #145.
 This dependency merge does not replace the curated MotorStorm vendor or prove
 native race performance. Windows Vulkan foundation remains issue #144; retail
 mstream remains parked. The cumulative branch is not an upstream proposal.
+
+## Windows Vulkan foundation (MotorStorm #144)
+
+Atomic branch: `codex/vulkan-windows-bootstrap`. Windows can opt into the
+shared Vulkan draw engine, using the system loader, SDL2 and glslang/SPIRV.
+The authored host is portable to Windows, including its actual guest-thread
+stack check. Requested guest translation/setup fails explicitly when absent.
+Windows CI builds this path with pinned header/SDL dependencies and checks
+that missing translation produces no frames. D3D12 remains available.
+
+Local Windows hardware checks exercised all fourteen existing guest-program
+scenes on an NVIDIA GeForce RTX 3080, plus the guest-thread stack contract.
+The separate missing-translator build passed its rejection CTest. Validation
+and final platform CI results are recorded in MotorStorm #144. These authored
+contracts do not establish title assets, normal PLAY, gameplay or FPS.
+Downstream native binding and operation-level Vulkan serialization remain
+follow-up work; no curated game vendor tree was replaced by this change.

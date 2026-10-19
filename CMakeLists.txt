@@ -44,14 +44,14 @@ file(GLOB_RECURSE HLE_SOURCES
 # Exclude test harnesses (e.g. libs/video/tests/*): they define their own main().
 list(FILTER HLE_SOURCES EXCLUDE REGEX "/tests/")
 
-# The Vulkan RSX backend is opt-in while it grows (stage V0: clear + present).
+# The Vulkan RSX backend is opt-in and uses the shared guest draw engine.
 # It loads libvulkan at run time, so building needs only the Vulkan headers --
 # no target-architecture libvulkan, which keeps cross-compiling simple.
-option(PS3RECOMP_RSX_VULKAN "Build the Vulkan RSX backend (Linux)" OFF)
+option(PS3RECOMP_RSX_VULKAN "Build the Vulkan RSX backend (Windows/Linux)" OFF)
 list(FILTER HLE_SOURCES EXCLUDE REGEX "rsx_vulkan_backend\\.c$")
 if(PS3RECOMP_RSX_VULKAN)
-    if(WIN32 OR APPLE)
-        message(FATAL_ERROR "PS3RECOMP_RSX_VULKAN is Linux-only for now")
+    if(APPLE)
+        message(FATAL_ERROR "PS3RECOMP_RSX_VULKAN is not enabled on macOS yet")
     endif()
     find_path(PS3RECOMP_VULKAN_INCLUDE_DIR vulkan/vulkan.h)
     if(NOT PS3RECOMP_VULKAN_INCLUDE_DIR)
@@ -177,6 +177,10 @@ if(APPLE)
 endif()
 
 if(PS3RECOMP_RSX_VULKAN)
+    if(WIN32)
+        find_package(SDL2 CONFIG REQUIRED)
+        target_link_libraries(ps3recomp_runtime PRIVATE SDL2::SDL2)
+    endif()
     target_include_directories(ps3recomp_runtime PRIVATE "${PS3RECOMP_VULKAN_INCLUDE_DIR}")
     # PUBLIC: ps3recomp_host selects its backend on this definition.
     target_compile_definitions(ps3recomp_runtime PUBLIC PS3RECOMP_RSX_VULKAN)
@@ -221,9 +225,11 @@ endif()
 #           the standalone binary as an imported target and fails to load
 #           without it)
 set(PS3RECOMP_MSL_TRANSLATION OFF)
-if(UNIX)
+if(UNIX OR PS3RECOMP_RSX_VULKAN)
     find_package(glslang CONFIG QUIET)
+endif()
 
+if(UNIX)
     # spirv-cross's C API. Debian ships it as a shared library and Homebrew as
     # a static one, under different pkg-config names -- and pkg-config itself
     # is not a given on a Mac, so fall back to a plain header + library search.
@@ -419,14 +425,13 @@ if(PS3RECOMP_BUILD_TESTS)
 endif()
 
 # ---------------------------------------------------------------------------
-# POSIX host harness
+# Backend host harness
 # ---------------------------------------------------------------------------
 # Drives the cellGcm -> RSX -> backend bridge with no lifted game, so a backend
 # can be brought up and regression-tested without a game binary or a recompiler
-# run. Builds on any POSIX host: it picks Metal on Apple and the null backend's
-# headless software path everywhere else, so Linux -- which has no real backend
-# yet -- can still run the whole guest command stream end to end in CI.
-if(UNIX)
+# run. Uses Metal on Apple, opt-in Vulkan on Windows/Linux, or the headless
+# null contract where no graphics backend is selected.
+if(UNIX OR (WIN32 AND PS3RECOMP_RSX_VULKAN))
     add_executable(ps3recomp_host
         runtime/host/host_posix.c
         runtime/host/host_stubs.c
@@ -443,6 +448,11 @@ if(UNIX)
     # The runtime carries C++ (and, with translation on, spirv-cross), so the
     # C++ driver must do the final link or the standard library goes missing.
     set_target_properties(ps3recomp_host PROPERTIES LINKER_LANGUAGE CXX)
+    if(WIN32 AND PS3RECOMP_RSX_VULKAN)
+        add_custom_command(TARGET ps3recomp_host POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "$<TARGET_FILE:SDL2::SDL2>" "$<TARGET_FILE_DIR:ps3recomp_host>")
+    endif()
 
     # Guest shader translation, decompilers -> HLSL -> MSL, with no GPU: the
     # regression net for the Metal backend's shader path on every platform.
@@ -613,6 +623,14 @@ if(PS3RECOMP_BUILD_TESTS OR BUILD_TESTING)
     add_test(NAME rsx_mrt_observer COMMAND test_rsx_mrt_observer)
     if(WIN32)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        if(PS3RECOMP_RSX_VULKAN AND NOT glslang_FOUND)
+            add_test(NAME rsx_vulkan_translation_required
+                COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_rsx_vulkan_host.py"
+                    "$<TARGET_FILE:ps3recomp_host>" --missing-translation
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/vulkan-unavailable-check")
+            set_tests_properties(rsx_vulkan_translation_required PROPERTIES TIMEOUT 60)
+        endif()
         add_executable(test_rsx_mrt_masks_gpu tests/rsx_mrt_masks_gpu.cpp)
         target_include_directories(test_rsx_mrt_masks_gpu PRIVATE libs/video)
         target_link_libraries(test_rsx_mrt_masks_gpu PRIVATE d3d12 dxgi d3dcompiler)
