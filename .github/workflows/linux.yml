@@ -65,6 +65,8 @@ jobs:
         run: cmake --build build
 
       - name: Checked SHUFB admission and baseline object code
+        env:
+          CC: ${{ matrix.compiler }}
         run: python tools/test_spu_shufb_dispatch.py --require-simd-code
 
       - name: Memory allocation and FIFO trace regressions

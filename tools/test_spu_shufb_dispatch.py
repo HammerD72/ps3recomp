@@ -6,6 +6,7 @@ object. Use it on an SSSE3 host; the value tests themselves run on any host.
 import argparse
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import shutil
@@ -23,6 +24,8 @@ def main():
     out.mkdir(parents=True)
     compiler = os.environ.get('MV_CLANG') or os.environ.get('CC') or shutil.which('clang-cl' if os.name == 'nt' else 'cc')
     assert compiler, 'Set MV_CLANG/CC or install a C compiler'
+    version = subprocess.run([compiler, '--version' if os.name != 'nt' else '/clang:--version'], capture_output=True, text=True)
+    (out/'compiler-version.log').write_text(version.stdout+version.stderr)
     binaries = {}
     for name, defines in [('dispatch', []), ('scalar', ['SPU_SHUFB_FORCE_SCALAR']), ('cpp', [])]:
         exe = out / (name + ('.exe' if os.name == 'nt' else ''))
@@ -36,6 +39,10 @@ def main():
         else:
             compile_cmd = [compiler, '-std=c11', '-O1', '-UNDEBUG', '-I'+str(ROOT/'runtime/spu'), '-c', str(source), '-o', str(obj)]
             compile_cmd += ['-D'+x for x in defines]
+            if platform.machine().lower() in ('x86_64', 'amd64'):
+                # Some distributions default to x86-64-v3. Verify the actual
+                # baseline contract rather than inheriting the runner's ISA.
+                compile_cmd += ['-march=x86-64', '-mtune=generic']
             if name == 'cpp': compile_cmd[1:1] = ['-x', 'c++', '-std=c++17']
             if name == 'cpp': compile_cmd.remove('-std=c11')
             link_cmd = [compiler, str(obj), '-lm', '-o', str(exe)]
