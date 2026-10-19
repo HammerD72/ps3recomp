@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import struct
 import subprocess
 
 
@@ -50,6 +51,9 @@ def main():
     results = []
     for scene in scenes:
         name = scene[0].removeprefix("--") if scene else "clear"
+        bmp = (args.output / (name + '.bmp')).resolve()
+        bmp.unlink(missing_ok=True)
+        env['PS3RECOMP_HOST_CAPTURE_BMP'] = str(bmp)
         proc = subprocess.run([str(exe), "--frames=2", *scene], env=env,
                               capture_output=True, text=True, timeout=45)
         log = proc.stdout + proc.stderr
@@ -64,6 +68,14 @@ def main():
             assert "nothing to check" not in log and not re.search(r"\[host\][^\r\n]*skipping", log, re.I), name
             assert "VUID" not in log and "Validation Error" not in log, name
             assert " FAIL" not in log, name
+            assert "BMP capture requires a completed readback" in log, name
+            image = bmp.read_bytes()
+            assert image[:2] == b'BM' and len(image) == struct.unpack_from('<I', image, 2)[0]
+            w,h = struct.unpack_from('<ii', image, 18)
+            assert w == 1280 and h == -720
+            pixel = struct.unpack_from('<I', image, 54 + ((-h//2)*w+w//2)*4)[0] | 0xFF000000
+            expected = re.search(r'presented pixel: 0x([0-9A-Fa-f]+)', log)
+            assert expected and pixel == int(expected[1],16), f'{name}: capture differs from readback'
             selected = re.search(r"using device (\d+): ([^\r\n]+)", log)
             assert selected, f"{name}: selected device not reported"
             device = re.search(r"device " + selected[1] + r": [^\r\n]+\(type (\d+),", log)

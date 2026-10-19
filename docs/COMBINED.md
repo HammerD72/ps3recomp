@@ -215,3 +215,13 @@ Windows and POSIX thread naming use their respective platform APIs. The
 executed authored fixture checks actual thread names and event contents,
 disabled operation, concurrent initialization and the event budget. These
 observers neither change guest execution nor establish title performance.
+
+## Completed native Vulkan readback captures (MotorStorm #146)
+
+Atomic branch: `codex/vulkan-native-capture`. Exposes a renderer-thread BMP
+export of the last completed GPU readback, without extra GPU submissions.
+Capture before a present fails explicitly. The public authored host exercises
+that rejection and exports all fourteen scenes; the hardware/validation runner
+checks complete BMP structure and exact center-pixel agreement with the actual
+readback. This provides observation data for native host integration; authored
+captures do not prove original assets or performance.

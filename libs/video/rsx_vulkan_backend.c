@@ -1863,6 +1863,44 @@ static void vk_dump_ppm(const unsigned char* rgba)
     fclose(f);
 }
 
+static void vk_bmp_u32(unsigned char* p, u32 value)
+{
+    p[0] = (unsigned char)value; p[1] = (unsigned char)(value >> 8);
+    p[2] = (unsigned char)(value >> 16); p[3] = (unsigned char)(value >> 24);
+}
+
+int rsx_vulkan_backend_capture_bmp(const char* path)
+{
+    uint64_t bytes = (uint64_t)s_vk.width * s_vk.height * 4;
+    if (!path || !*path || !s_vk.presented || !s_vk.readback.ptr || bytes > UINT32_MAX - 54) {
+        VK_LOG("BMP capture requires a completed readback and valid path/size\n"); return -1;
+    }
+    FILE* f = fopen(path, "wb");
+    if (!f) { VK_LOG("cannot open BMP capture %s\n", path); return -1; }
+    unsigned char header[54] = { 'B', 'M' };
+    vk_bmp_u32(header + 2, (u32)bytes + 54);
+    vk_bmp_u32(header + 10, 54); vk_bmp_u32(header + 14, 40);
+    vk_bmp_u32(header + 18, s_vk.width);
+    vk_bmp_u32(header + 22, (u32)(-(int32_t)s_vk.height));
+    header[26] = 1; header[28] = 32;
+    vk_bmp_u32(header + 34, (u32)bytes);
+    unsigned char* row = (unsigned char*)malloc((size_t)s_vk.width * 4);
+    int failed = !row || fwrite(header, 1, sizeof header, f) != sizeof header;
+    const unsigned char* rgba = (const unsigned char*)s_vk.readback.ptr;
+    for (u32 y = 0; !failed && y < s_vk.height; y++) {
+        for (u32 x = 0; x < s_vk.width; x++) {
+            size_t at = ((size_t)y * s_vk.width + x) * 4;
+            row[x*4] = rgba[at+2]; row[x*4+1] = rgba[at+1];
+            row[x*4+2] = rgba[at]; row[x*4+3] = rgba[at+3];
+        }
+        failed = fwrite(row, 4, s_vk.width, f) != s_vk.width;
+    }
+    free(row);
+    if (fclose(f)) failed = 1;
+    if (failed) VK_LOG("BMP capture write failed: %s\n", path);
+    return failed ? -1 : 0;
+}
+
 static void vk_cb_present(void* ud, u32 buffer_id)
 {
     (void)ud; (void)buffer_id;

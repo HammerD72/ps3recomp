@@ -85,6 +85,11 @@ u32  rsx_vulkan_backend_debug_color(void);
  * has been presented yet. */
 u32  rsx_vulkan_backend_readback_center(void);
 
+/* Export the last completed readback as a top-down BGRA BMP. Call on the
+ * renderer thread after present; returns -1 on missing readback/write failure.
+ * This never submits work or fabricates an image before the first present. */
+int rsx_vulkan_backend_capture_bmp(const char* path);
+
 /* Draws of the last presented frame that ran the guest's own programs. */
 u32  rsx_vulkan_backend_guest_draws(void);
 

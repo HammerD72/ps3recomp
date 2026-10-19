@@ -1322,6 +1322,13 @@ int main(int argc, char** argv)
         free(vm_base);
         return 1;
     }
+#ifdef PS3RECOMP_RSX_VULKAN
+    const char* capture_before = getenv("PS3RECOMP_HOST_CAPTURE_BMP");
+    if (capture_before && rsx_vulkan_backend_capture_bmp(capture_before) == 0) {
+        fprintf(stderr,"[host] capture succeeded before any present\n");
+        host_backend_shutdown(); return 3;
+    }
+#endif
     /* Known only once the backend is up: the device decides. A skip is
      * reported in words the Vulkan workflow recognises, not as a pass. */
     if (do_draw == 12 && !HOST_BACKEND_DEPTH_BOUNDS) {
@@ -1392,6 +1399,12 @@ int main(int argc, char** argv)
         host_backend_present();
     }
     printf("[host] presented %d frame(s)\n", presented);
+#ifdef PS3RECOMP_RSX_VULKAN
+    const char* capture_bmp = getenv("PS3RECOMP_HOST_CAPTURE_BMP");
+    if (capture_bmp && rsx_vulkan_backend_capture_bmp(capture_bmp)) {
+        host_backend_shutdown(); return 3;
+    }
+#endif
 
     u32 back = host_backend_center();
     int rc = (got == CLEAR_ARGB) ? 0 : 2;
