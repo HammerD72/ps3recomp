@@ -12,7 +12,18 @@ static void entry(spu_context* c) {
     if (exit_next == 2) c->stop_code = 0x123; /* An ordinary STOP is not task EXIT. */
 }
 int spu_run_with_halt(spu_lifted_entry_fn fn, spu_context* c) { fn(c); return exit_next; }
-void spu_coh_unregister(spu_context* c) { (void)c; }
+static unsigned engine_releases, coherence_removals;
+static spu_context* released_context;
+void spu_mfc_release(spu_context* c) {
+    assert(c && !released_context);
+    released_context = c;
+    ++engine_releases;
+}
+void spu_coh_unregister(spu_context* c) {
+    assert(released_context == c && engine_releases == coherence_removals + 1);
+    released_context = NULL;
+    ++coherence_removals;
+}
 int main(void)
 {
     uint32_t reason = 99;
@@ -25,5 +36,6 @@ int main(void)
     exit_next = 0;
     assert(spu_run_lifted_job_abi_result(entry, NULL, 0, 0, 0, NULL, NULL, &reason) == 0 && reason == 0);
     assert(spu_run_lifted_job_abi_result(NULL, NULL, 0, 0, 0, NULL, NULL, &reason) == -1 && reason == 0);
+    assert(engine_releases == 4 && coherence_removals == 4 && !released_context);
     puts("PASS actual runner: return/EXIT/return/no-entry result, fresh context"); return 0;
 }

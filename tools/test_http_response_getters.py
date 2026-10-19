@@ -25,7 +25,8 @@ import tempfile
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(TOOLS)
 TESTS = os.path.join(ROOT, "libs", "network", "tests")
-SOURCES = [os.path.join(TESTS, "test_http_response_getters.c")]
+SOURCES = [os.path.join(TESTS, "test_http_response_getters.c"),
+           os.path.join(ROOT, "runtime", "memory", "guest_read_sync.c")]
 
 
 def _cc():

@@ -71,7 +71,7 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         exe = os.path.join(td, "test_savedata_user_autosave")
         cmd = [cc, "-std=gnu17", "-w", "-I" + os.path.join(ROOT, "include"),
-               "-o", exe, SOURCE]
+               "-o", exe, SOURCE, os.path.join(ROOT, "runtime/memory/guest_read_sync.c")]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
             print("FAIL: fixture did not build")

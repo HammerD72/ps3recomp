@@ -56,10 +56,15 @@ jobs:
           CI: "1"          # makes a skipped conformance run fail instead of passing
         run: |
           set -e
+          failed=0
           for t in tools/test_*.py; do
             echo "--- $t"
-            python "$t"
+            if ! python "$t"; then
+              echo "::error::$t failed"
+              failed=1
+            fi
           done
+          exit "$failed"
 
       # libs/system/tests/ existed and NOTHING ran it -- two suites checked in,
       # both documenting a macOS clang line in their own header comment, neither

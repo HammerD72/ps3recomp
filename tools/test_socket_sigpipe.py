@@ -19,6 +19,7 @@ def main():
             binary = pathlib.Path(tmp) / define
             subprocess.run(["cc", "-std=gnu17", "-ffunction-sections", "-fdata-sections",
                             "-Iinclude", "-D" + define, "libs/network/tests/test_socket_sigpipe.c",
+                            "runtime/memory/guest_read_sync.c",
                             "-Wl,-dead_strip" if os.uname().sysname == "Darwin" else "-Wl,--gc-sections",
                             "-pthread", "-o", str(binary)], cwd=ROOT, check=True, timeout=120)
             control = subprocess.run([str(binary), "raw", "default"], capture_output=True, timeout=10)

@@ -82,10 +82,15 @@ jobs:
           CI: "1"
         run: |
           set -e
+          failed=0
           for t in tools/test_*.py; do
             echo "--- $t"
-            python "$t"
+            if ! python "$t"; then
+              echo "::error::$t failed"
+              failed=1
+            fi
           done
+          exit "$failed"
 
       # runtime/ppu/ is the one part of the runtime no CMake target builds --
       # it needs the lifter's per-game ppu_recomp.h -- so it was only ever
