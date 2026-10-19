@@ -105,3 +105,33 @@ preview velocities/transforms, but still has material/shader defects and has
 not demonstrated race entry or a minimum frame rate. FPSCR accumulation,
 comparisons/conversions and hardware identity of estimate tables are outside
 this value correction. The whole combined runtime is not overlaid onto the game.
+
+
+## Scoped exact SIMD value acceleration
+
+The atomic `codex/spu-float-simd` change is tracked by MotorStorm issue 142.
+It accelerates ordinary-range FA/FS/FM/FMA/FMS/FNMS in both compiled SPU code
+and interpreted dispatch. Exponent-255 inputs and overflow-boundary outputs
+retain the exact integer implementation. FMA requires a checked CPU feature
+and enabled OS AVX state; other architectures retain the scalar path.
+
+Public drain/interpreter boundaries enable a thread-local capability scope.
+Only individual optimized arithmetic operations change MXCSR to truncation,
+FTZ/DAZ and masked exceptions, restoring the entire previous value afterward.
+Other host services keep their previous rounding environment. Nested scopes
+and outer restoration after an inner longjmp are covered. This does not alter
+PM interpretation policy, instruction execution, FPSCR support or guest data.
+
+The independent rational oracle passes 36,816 lanes each through actual
+helpers and interpreter dispatch. The production regression compares 1.92
+million lanes against the exact integer helpers under all four host rounding
+modes, exercises mixed extended values, hardware admission, scalar fallback,
+constant operands, nested restoration and an unmasked caller environment.
+Existing 63 helper checks and the productive IRET regression also pass.
+
+An authored Windows checked-O1 helper-throughput trial used five alternating
+scalar/SIMD pairs, each 20 million iterations of four-lane FMA followed by add.
+All paired checksums matched. Scalar median was 1.5942413 seconds (range
+1.5630011-1.6152887); SIMD median was 0.4199008 (0.4126122-0.4269420).
+This is a normal-range helper benchmark, not a native gameplay FPS result.
+Native Windows/D3D12 performance and source-recompile acceptance remain open.

@@ -96,6 +96,8 @@ def main():
         cmd=[compiler,'/nologo','/O2','/fp:strict','/I'+str(header_root),str(source),'/Fe'+str(exe),'/Fo'+str(out)+'/']
     else:
         cmd=[compiler,'-O2','-std=c11','-ffp-contract=off','-I',str(header_root),str(source),'-o',str(exe)]
+    if (header_root/'runtime/spu/spu_float_simd.c').exists():
+        cmd += [('/D' if os.name=='nt' else '-D')+'SPU_FLOAT_SIMD_TEST',str(header_root/'runtime/spu/spu_float_simd.c')]
     if args.interpreter:
         cmd += [('/D' if os.name=='nt' else '-D')+'SPU_FLOAT_INTERPRETER',str(header_root/'runtime/spu/spu_interp.c')]
     if os.name!='nt':

@@ -42,6 +42,9 @@ static u128 interpreted(unsigned op,u128 a,u128 b,u128 c) {
 #endif
 
 int main(void) {
+#ifdef SPU_FLOAT_SIMD_TEST
+    uint64_t saved=spu_sf_simd_enter();
+#endif
     unsigned op;
     u128 a, b, c, r;
 #ifdef SPU_FLOAT_INTERPRETER
@@ -68,5 +71,8 @@ int main(void) {
 #endif
         printf("%08x %08x %08x %08x\n",r._u32[0],r._u32[1],r._u32[2],r._u32[3]);
     }
+#ifdef SPU_FLOAT_SIMD_TEST
+    spu_sf_simd_leave(saved);
+#endif
     return ferror(stdin) || ferror(stdout);
 }

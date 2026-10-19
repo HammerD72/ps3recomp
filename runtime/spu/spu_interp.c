@@ -343,7 +343,7 @@ uint32_t spu_interp_run(spu_context* ctx, uint32_t start_lsa) {
     return spu_interp_run_until(ctx, start_lsa, 0);
 }
 
-uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa) {
+static uint32_t spu_interp_run_until_scoped_body(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa) {
     ctx->pc = start_lsa & 0x3FFFC;
     ctx->status = SPU_STATUS_RUNNING;
     uint64_t steps = 0;
@@ -453,4 +453,11 @@ void spu_dispatch(spu_context* ctx, uint32_t target) {
         if ((next & 0x3FFFC) == target) return;   /* no-progress guard */
         target = next;
     }
+}
+
+uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa) {
+    uint64_t saved=spu_sf_simd_enter();
+    uint32_t result=spu_interp_run_until_scoped_body(ctx,start_lsa,stop_lsa);
+    spu_sf_simd_leave(saved);
+    return result;
 }

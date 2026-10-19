@@ -67,8 +67,8 @@ jobs:
       - name: Memory allocation and FIFO trace regressions
         run: |
           cmake -S . -B build -DPS3RECOMP_BUILD_TESTS=ON
-          cmake --build build --target test_spu_mfc_registry test_rsx_pipeline_cache test_rsx_capture_schedule test_rsx_slot_pool test_rsx_shader_cache test_rsx_gpu_references test_rsx_gpu_submission test_rsx_fp_decompiler test_memory_container test_gcm_draw_trace test_rsx_upload_buffer test_rsx_upload_strip test_rsx_record_batch test_rsx_texture_remap test_rsx_timeline_select test_rsx_mrt_observer test_rsx_mrt_masks
-          ctest --test-dir build -R "^(spu_mfc_registry|rsx_pipeline_cache|rsx_capture_schedule|rsx_slot_pool|rsx_shader_cache|rsx_gpu_references|rsx_gpu_submission|rsx_fp_decompiler|memory_container_allocation|gcm_draw_trace|rsx_upload_buffer|rsx_upload_strip|rsx_record_batch|rsx_texture_remap|rsx_timeline_select|rsx_mrt_observer|rsx_mrt_masks)$" --output-on-failure
+          cmake --build build --target test_spu_float_simd test_spu_mfc_registry test_rsx_pipeline_cache test_rsx_capture_schedule test_rsx_slot_pool test_rsx_shader_cache test_rsx_gpu_references test_rsx_gpu_submission test_rsx_fp_decompiler test_memory_container test_gcm_draw_trace test_rsx_upload_buffer test_rsx_upload_strip test_rsx_record_batch test_rsx_texture_remap test_rsx_timeline_select test_rsx_mrt_observer test_rsx_mrt_masks
+          ctest --test-dir build -R "^(spu_float_simd|spu_mfc_registry|rsx_pipeline_cache|rsx_capture_schedule|rsx_slot_pool|rsx_shader_cache|rsx_gpu_references|rsx_gpu_submission|rsx_fp_decompiler|memory_container_allocation|gcm_draw_trace|rsx_upload_buffer|rsx_upload_strip|rsx_record_batch|rsx_texture_remap|rsx_timeline_select|rsx_mrt_observer|rsx_mrt_masks)$" --output-on-failure
 
       - name: Verify the archive exists and is x86-64
         run: |
@@ -120,7 +120,7 @@ jobs:
         run: |
           ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }} \
             -std=gnu17 -I include -I runtime/spu \
-            -o /tmp/test_spu_helpers runtime/spu/tests/test_spu_helpers.c -lm runtime/memory/guest_read_sync.c
+            -o /tmp/test_spu_helpers runtime/spu/tests/test_spu_helpers.c runtime/spu/spu_float_simd.c -lm runtime/memory/guest_read_sync.c
           /tmp/test_spu_helpers
 
       # libnet over host sockets (PS3_NET_ONLINE), end to end on loopback: every
@@ -347,7 +347,7 @@ jobs:
             runtime/spu/spu_coherency.c runtime/spu/spu_workload.c runtime/spu/spu_task_lifecycle.c \
             runtime/spu/spurs_policy.c runtime/spu/spurs_job.c \
             runtime/spu/spu_tsp_weak.c runtime/spu/spu_vm_pagemap.c \
-            runtime/spu/spurs_policy_blob_weak.c runtime/spu/spu_interp.c \
+            runtime/spu/spurs_policy_blob_weak.c runtime/spu/spu_interp.c runtime/spu/spu_float_simd.c \
             runtime/platform/win32_compat.c \
             -lpthread -lm runtime/memory/guest_read_sync.c
           /tmp/test_spu_lockline_peer
@@ -364,7 +364,7 @@ jobs:
             runtime/spu/spu_coherency.c runtime/spu/spu_workload.c runtime/spu/spu_task_lifecycle.c \
             runtime/spu/spurs_policy.c runtime/spu/spurs_job.c \
             runtime/spu/spu_tsp_weak.c runtime/spu/spu_vm_pagemap.c \
-            runtime/spu/spurs_policy_blob_weak.c runtime/spu/spu_interp.c \
+            runtime/spu/spurs_policy_blob_weak.c runtime/spu/spu_interp.c runtime/spu/spu_float_simd.c \
             runtime/platform/win32_compat.c \
             -lpthread -lm runtime/memory/guest_read_sync.c
           /tmp/test_spu_taskset_wake
@@ -388,7 +388,7 @@ jobs:
             runtime/spu/spu_workload.c runtime/spu/spu_task_lifecycle.c runtime/spu/spurs_policy.c \
             runtime/spu/spurs_job.c runtime/spu/spu_tsp_weak.c \
             runtime/spu/spu_vm_pagemap.c runtime/spu/spurs_policy_blob_weak.c \
-            runtime/spu/spu_interp.c runtime/spu/spu_lifted_thread.c \
+            runtime/spu/spu_interp.c runtime/spu/spu_float_simd.c runtime/spu/spu_lifted_thread.c \
             runtime/syscalls/spu_fallback.c runtime/syscalls/sdk_version_weak.c \
             runtime/platform/win32_compat.c \
             -lpthread -lm runtime/memory/guest_read_sync.c
@@ -411,7 +411,7 @@ jobs:
             runtime/spu/spu_coherency.c runtime/spu/spu_workload.c runtime/spu/spu_task_lifecycle.c \
             runtime/spu/spurs_policy.c runtime/spu/spurs_job.c \
             runtime/spu/spu_tsp_weak.c runtime/spu/spu_vm_pagemap.c \
-            runtime/spu/spurs_policy_blob_weak.c runtime/spu/spu_interp.c \
+            runtime/spu/spurs_policy_blob_weak.c runtime/spu/spu_interp.c runtime/spu/spu_float_simd.c \
             runtime/platform/win32_compat.c \
             -lpthread -lm runtime/memory/guest_read_sync.c
           /tmp/test_spu_mfc_slots

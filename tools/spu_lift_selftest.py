@@ -193,7 +193,7 @@ def main() -> int:
     open(driver, "w").write(gen_driver(meta))
     exe = os.path.join(work, "spulift.exe")
     sh([args.host_cc, "-std=c11", "-O2", "-w", "-I", gen, "-I", RUNTIME_SPU,
-        os.path.join(gen, "spu_recomp.c"), driver, "-o", exe])
+        os.path.join(gen, "spu_recomp.c"), driver, os.path.join(RUNTIME_SPU, "spu_float_simd.c"), "-o", exe])
     out = subprocess.run([exe], capture_output=True, text=True)
     print(out.stdout, end="")
     if args.keep:
