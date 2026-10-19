@@ -234,3 +234,24 @@ explicit requested mute failure is fatal. Guest PCM, consumption, device
 scheduling and recording remain intact. `check_audio_mute_host.py` requires
 two real mute/init/shutdown cycles with no backend warnings. This host
 preference establishes no guest audio accuracy or title performance result.
+
+
+## Checked byte-shuffle dispatch (MotorStorm #143)
+
+Atomic branch `codex/spu-shufb-dispatch` through `7a29f4d` adds baseline-callable,
+CPU-checked SSSE3 SHUFB with exact scalar fallback and preserves the existing
+AArch64 NEON implementation. No runtime-wide higher ISA flag or additional
+link object is required. Integration preserves the newer arithmetic helpers,
+inline read-sync test and host regression steps on this branch.
+
+Local Release runtime and four selected CTests pass. Independent selector and
+random-value fixtures pass 204,096 cases each for C dispatch, forced scalar and
+C++ callers; baseline object checks prove checked x86 SIMD admission. Five
+alternating checked-O1 authored helper pairs have matching consumed outputs:
+scalar median 0.391 seconds (0.388-0.416), dispatch 0.235 (0.229-0.241), each
+20 million dependent operations. These are helper results, not game FPS.
+
+The downstream original-target DX12 recheck reaches the original main menu
+and normal-PLAY Grizzly start environment, but retains transparency defects
+and a later CPU-surface-read deadline. Sustained gameplay and 30 FPS remain
+unaccepted. Exact integrated platform CI is a separate check.

@@ -16,6 +16,7 @@
 #include "spu_context.h"
 #include "spu_float.h"
 #include "spu_float_simd.h"
+#include "spu_shuffle.h"
 #include <string.h>
 #include <math.h>
 
@@ -36,7 +37,7 @@ static inline int spu_clz32(uint32_t x) { return x ? __builtin_clz(x) : 32; }
 #endif
 
 /* Architectural SPU barrier -- the lifted `sync`/`dsync`/`syncc` emission.
- * SPU ISA v1.2 Â§13 (+ the per-instruction pages): order all earlier LS and
+ * SPU ISA v1.2 §13 (+ the per-instruction pages): order all earlier LS and
  * channel accesses before later ones; LS must be consistent "if it were\n * observed by another entity" (Table 13-6 is exactly this runtime's
  * host-thread producer -> SPU consumer handoff). A no-op is neither a
  * compiler nor a CPU barrier -- MSVC at /O2 may reorder plain LS accesses
@@ -220,7 +221,7 @@ static inline u128 spu_sfi(u128 a, int32_t imm) { return spu_sfi_ref(a, imm); }
 #endif
 static inline u128 spu_sfhi_ref(u128 a, int32_t imm){ u128 r; for(int i=0;i<8;i++) r._u16[i]=(uint16_t)imm-a._u16[i]; return r; }
 
-/* ---- multiply (low halfword of each word Ã— ... -> 32-bit, per SPU mpy) ----
+/* ---- multiply (low halfword of each word × ... -> 32-bit, per SPU mpy) ----
  * Sub-lane indexing assumes a little-endian host (matches the recompiler's
  * target). The "low halfword of word i" in SPU BE semantics is _s16[2i] on
  * an LE host (NOT _s16[2i+1], which would be correct on a BE host). */
@@ -360,101 +361,6 @@ static inline u128 spu_selb(u128 a, u128 b, u128 c) {
 #else
 static inline u128 spu_selb(u128 a, u128 b, u128 c) { return spu_selb_ref(a, b, c); }
 #endif
-/* shufb special selectors per Cell BE ISA:
- *   sel & 0xE0 == 0xE0 -> 0x80
- *   sel & 0xC0 == 0xC0 -> 0xFF
- *   sel & 0xC0 == 0x80 -> 0x00
- *   otherwise           -> concat{a,b}[sel & 0x1F] */
-#if defined(__SSE4_1__)
-#include <smmintrin.h>
-/* pshufb version: one of the hottest SPU ops (~11% of GH3's FMOD mixer task
- * as the byte loop). SPU byte P lives at host byte SPU_W(P), i.e. the bytes
- * of each 32-bit word reversed, so swap into SPU order, select, swap back. */
-static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
-    const __m128i sw = _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12);
-    __m128i A, B, C; memcpy(&A, &a, 16); memcpy(&B, &b, 16); memcpy(&C, &c, 16);
-    A = _mm_shuffle_epi8(A, sw); B = _mm_shuffle_epi8(B, sw); C = _mm_shuffle_epi8(C, sw);
-    const __m128i idx = _mm_and_si128(C, _mm_set1_epi8(0x0F));
-    const __m128i fromb = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8(0x10)), _mm_set1_epi8(0x10));
-    __m128i r = _mm_blendv_epi8(_mm_shuffle_epi8(A, idx), _mm_shuffle_epi8(B, idx), fromb);
-    /* Special selectors: 10x -> 0x00, 110 -> 0xFF, 111 -> 0x80. */
-    const __m128i m80 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0x80)), _mm_set1_epi8((char)0x80));
-    const __m128i mC0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xC0)), _mm_set1_epi8((char)0xC0));
-    const __m128i mE0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xE0)), _mm_set1_epi8((char)0xE0));
-    const __m128i special = _mm_blendv_epi8(mC0, _mm_set1_epi8((char)0x80), mE0);
-    r = _mm_shuffle_epi8(_mm_blendv_epi8(r, special, m80), sw);
-    u128 out; memcpy(&out, &r, 16); return out;
-}
-#elif defined(__ARM_NEON)
-#include <arm_neon.h>
-/* NEON version: tbl over the 32-byte {a,b} concatenation. SPU byte P lives at
- * host byte P^3 (each word's bytes reversed), so rev32 into SPU order,
- * select, and rev32 back. */
-static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
-    uint8x16x2_t t;
-    t.val[0] = vrev32q_u8(vld1q_u8(a._u8));
-    t.val[1] = vrev32q_u8(vld1q_u8(b._u8));
-    const uint8x16_t C = vrev32q_u8(vld1q_u8(c._u8));
-    uint8x16_t r = vqtbl2q_u8(t, vandq_u8(C, vdupq_n_u8(0x1F)));
-    /* Special selectors: 10x -> 0x00, 110 -> 0xFF, 111 -> 0x80. */
-    const uint8x16_t m80 = vtstq_u8(C, vdupq_n_u8(0x80));
-    const uint8x16_t mC0 = vceqq_u8(vandq_u8(C, vdupq_n_u8(0xC0)), vdupq_n_u8(0xC0));
-    const uint8x16_t mE0 = vceqq_u8(vandq_u8(C, vdupq_n_u8(0xE0)), vdupq_n_u8(0xE0));
-    const uint8x16_t special = vbslq_u8(mE0, vdupq_n_u8(0x80), mC0);
-    r = vrev32q_u8(vbslq_u8(m80, special, r));
-    u128 out; vst1q_u8(out._u8, r); return out;
-}
-#endif
-#if defined(__SSE4_1__) || defined(__ARM_NEON)
-/* The byte loop stays as the reference (tests/test_spu_shufb.c checks both). */
-static inline u128 spu_shufb_ref(u128 a, u128 b, u128 c) {
-    /* shufb is defined on SPU byte positions. Our u128 is host-native LE, so SPU
-     * byte P lives at _u8[SPU_W(P)]; map every access (the concat source, the
-     * control, and the result) through SPU_W so a control supplied as an immediate
-     * (ila/il) or an LS-loaded constant -- already in true SPU byte order -- is
-     * interpreted correctly. The cbd/chd/cwd/cdd generators below produce true
-     * SPU-byte-order selectors to match. */
-    uint8_t cat[32];
-    for (int j=0;j<16;j++) cat[j]    = a._u8[SPU_W(j)];   /* concat SPU byte j  = a SPU byte j */
-    for (int j=0;j<16;j++) cat[16+j] = b._u8[SPU_W(j)];   /* concat SPU byte 16+j = b SPU byte j */
-    u128 r;
-    for (int t=0;t<16;t++) {                              /* result SPU byte t */
-        uint8_t s = c._u8[SPU_W(t)];                      /* control SPU byte t */
-        uint8_t v;
-        if      ((s & 0xE0)==0xE0) v=0x80;
-        else if ((s & 0xC0)==0xC0) v=0xFF;
-        else if ((s & 0xC0)==0x80) v=0x00;
-        else                       v=cat[s & 0x1F];       /* concat SPU byte (s & 0x1F) */
-        r._u8[SPU_W(t)] = v;
-    }
-    return r;
-}
-#else
-static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
-    /* shufb is defined on SPU byte positions. Our u128 is host-native LE, so SPU
-     * byte P lives at _u8[SPU_W(P)]; map every access (the concat source, the
-     * control, and the result) through SPU_W so a control supplied as an immediate
-     * (ila/il) or an LS-loaded constant -- already in true SPU byte order -- is
-     * interpreted correctly. The cbd/chd/cwd/cdd generators below produce true
-     * SPU-byte-order selectors to match. */
-    uint8_t cat[32];
-    for (int j=0;j<16;j++) cat[j]    = a._u8[SPU_W(j)];   /* concat SPU byte j  = a SPU byte j */
-    for (int j=0;j<16;j++) cat[16+j] = b._u8[SPU_W(j)];   /* concat SPU byte 16+j = b SPU byte j */
-    u128 r;
-    for (int t=0;t<16;t++) {                              /* result SPU byte t */
-        uint8_t s = c._u8[SPU_W(t)];                      /* control SPU byte t */
-        uint8_t v;
-        if      ((s & 0xE0)==0xE0) v=0x80;
-        else if ((s & 0xC0)==0xC0) v=0xFF;
-        else if ((s & 0xC0)==0x80) v=0x00;
-        else                       v=cat[s & 0x1F];       /* concat SPU byte (s & 0x1F) */
-        r._u8[SPU_W(t)] = v;
-    }
-    return r;
-}
-#define spu_shufb_ref spu_shufb
-#endif
-
 /* ---- shift / rotate immediate (word lanes) ---- */
 static inline u128 spu_shli(u128 a, int sh)  { u128 r; sh&=0x3F; for(int i=0;i<4;i++) r._u32[i]=(sh>31)?0:(a._u32[i]<<sh); return r; }
 static inline u128 spu_shlhi(u128 a, int sh) { u128 r; sh&=0x1F; for(int i=0;i<8;i++) r._u16[i]=(sh>15)?0:(uint16_t)(a._u16[i]<<sh); return r; }
@@ -1253,7 +1159,7 @@ static inline u128 spu_fsmbi(int32_t imm) {
 }
 
 /* ---- Phase 3: constant generators (insertion shuffle patterns) ---- */
-/* Generate-controls (cbd/chd/cwd/cdd) â€” insertion selectors for the (now
+/* Generate-controls (cbd/chd/cwd/cdd) — insertion selectors for the (now
  * SPU-byte-correct) shufb. Each builds a control in TRUE SPU byte order: the
  * base selects b's SPU byte t at result SPU byte t (selector 0x10+t), and the
  * insert positions select a's preferred scalar bytes -- SPU byte 3 for a byte
