@@ -109,6 +109,10 @@ typedef struct ppu_context {
     uint32_t vrsave;        /* VRSAVE (SPR 256): plain state      */
 } ppu_context;
 
+#ifdef __cplusplus
+struct ppu_nonlocal_jump { ppu_context* ctx; uint32_t pc; uint64_t sp; };
+#endif
+
 /* Memory access helpers (provided by runtime) */
 #ifdef __cplusplus
 extern "C" {
@@ -899,6 +903,7 @@ class PPULifter:
                 f"underscore; using {prefix + chr(95)!r}"+chr(10))
             prefix += "_"
         self.prefix = prefix
+        self.cpp_nonlocal_jumps = False
         self.weak_emit = bool(weak_emit)
         # Cache for _range_insns: (instructions, len, ordered, addrs). Keyed by
         # the instruction-list identity so the FULL list (mid-function / serial
@@ -3970,7 +3975,63 @@ class PPULifter:
             lines.append(f"/* {label} */")
         weak = "__attribute__((weak)) " if getattr(self, "weak_emit", False) else ""
         lines.append(f"void {weak}{func.name}(ppu_context* ctx) {{")
-        for bline in _fuse_cr(func.body_lines):
+        body = list(_fuse_cr(func.body_lines))
+        resume_points = []
+        if self.cpp_nonlocal_jumps:
+            cache = getattr(self, "_nonlocal_alias_cache", None)
+            if cache is None or cache[0] is not func_by_addr:
+                aliases = {a for a in func_by_addr
+                           if self.name_map.get(a, "").lstrip(".") in ("setjmp", "_setjmp")}
+                tail_pattern = re.compile(r"\{ g_trampoline_fn = \(void\(\*\)\(void\*\)\)" +
+                                          re.escape(self.prefix) + r"func_([0-9A-F]+); return; \}")
+                changed = True
+                while changed:
+                    changed = False
+                    for a, candidate in func_by_addr.items():
+                        if a in aliases or not candidate.body_lines:
+                            continue
+                        tail = tail_pattern.fullmatch(candidate.body_lines[-1].strip())
+                        if tail and int(tail[1], 16) in aliases and all(
+                            b.strip() == "vm_write64(ctx->gpr[1] + 0x28, ctx->gpr[2]);" or
+                            b.strip().startswith("ctx->gpr[2] = ctx->gpr[2] + ")
+                            for b in candidate.body_lines[:-1]):
+                            aliases.add(a)
+                            changed = True
+                self._nonlocal_alias_cache = (func_by_addr, aliases)
+            else:
+                aliases = cache[1]
+            # Recognize standard-library symbols, never a title/address. Each
+            # saved SP distinguishes recursive invocations with the same PC.
+            call_pattern = re.compile(r"ctx->lr = 0x([0-9A-F]+); " +
+                                      re.escape(self.prefix) + r"func_([0-9A-F]+)\(ctx\);")
+            rewritten = []
+            for bline in body:
+                match = call_pattern.search(bline)
+                if match and int(match[2], 16) in aliases:
+                    pc = int(match[1], 16)
+                    resume_points.append(pc)
+                    rewritten.append(f"    _nonlocal_sp_{pc:08X} = ctx->gpr[1];")
+                    rewritten.append(bline)
+                    rewritten.append(f"loc_nonlocal_{pc:08X}: ;")
+                elif label and label.lstrip(".") in ("longjmp", "_longjmp") and bline.strip() == "return;":
+                    rewritten.append("    throw ppu_nonlocal_jump{ctx, (uint32_t)ctx->lr, ctx->gpr[1]};")
+                else:
+                    rewritten.append(bline)
+            body = rewritten
+        if resume_points:
+            # Snapshot declarations must precede try/resume labels: jumping
+            # past their initialization is illegal C++ and loses caller state.
+            snapshots = [b for b in body if re.match(r"\s*(?:const )?uint64_t _cs_", b)]
+            body = [b for b in body if b not in snapshots]
+            lines.extend(snapshots)
+            lines.append("    uint32_t _nonlocal_pc = 0;")
+            for pc in resume_points:
+                lines.append(f"    uint64_t _nonlocal_sp_{pc:08X} = 0;")
+            lines.extend(["    for (;;) {", "    try {", "    switch (_nonlocal_pc) {"])
+            for pc in resume_points:
+                lines.append(f"    case 0x{pc:08X}: goto loc_nonlocal_{pc:08X};")
+            lines.extend(["    default: break;", "    }"])
+        for bline in body:
             lines.append(f"    {bline}" if not bline.endswith(":") else bline)
 
         # If a function doesn't end with blr/b/bctr (a return or unconditional
@@ -4005,6 +4066,14 @@ class PPULifter:
                       f"0x{func.fallthrough_to:08X}; emitting halt", flush=True)
                 lines.append(f"        /* missing continuation 0x{func.fallthrough_to:08X}: halt */ return;")
 
+        if resume_points:
+            lines.extend(["    return;", "    } catch (const ppu_nonlocal_jump& jump) {",
+                          "    bool handled = false;", "    if (jump.ctx == ctx) switch (jump.pc) {"])
+            for pc in resume_points:
+                lines.append(f"    case 0x{pc:08X}: handled = jump.sp == _nonlocal_sp_{pc:08X}; break;")
+            lines.extend(["    default: break;", "    }", "    if (!handled) throw;",
+                          "    _nonlocal_pc = jump.pc;", "    g_trampoline_fn = 0;",
+                          "    }", "    }"])
         lines.append("}")
         lines.append("")
         return lines
@@ -4741,6 +4810,8 @@ def main() -> None:
     parser.add_argument("input", help="Input ELF or raw binary")
     parser.add_argument("--output", "-o", default=".", help="Output directory")
     parser.add_argument("--header-name", default="ppu_recomp.h", help="Header file name")
+    parser.add_argument("--cpp-nonlocal-jumps", action="store_true",
+                        help="C++ nonlocal returns for standard setjmp/longjmp symbols")
     parser.add_argument("--source-name", default="ppu_recomp.c", help="Source file name")
     parser.add_argument("--single-file", action="store_true",
                         help="Emit one ppu_recomp.c instead of split chunks (for "
@@ -4798,6 +4869,8 @@ def main() -> None:
                              "split out as its own 0x20-byte function so direct "
                              "calls to it dispatch to the HLE handler.")
     args = parser.parse_args()
+    if args.cpp_nonlocal_jumps and not args.source_name.endswith((".cpp", ".cc", ".cxx")):
+        parser.error("--cpp-nonlocal-jumps requires C++ output")
 
     # Load firmware-import stubs (addr -> NID) up front; applied to func_bounds
     # and the lifter below.
@@ -5232,6 +5305,7 @@ def main() -> None:
     print(f"Lifting {len(func_bounds)} functions...")
 
     lifter = PPULifter(prefix=args.symbol_prefix, weak_emit=args.weak)
+    lifter.cpp_nonlocal_jumps = args.cpp_nonlocal_jumps
     lifter.header_name = args.header_name
     # A single-module executable keeps r2 (TOC) constant, so an `ld r2, N(r1)` TOC
     # restore can be lowered to this literal instead of a stack read (the recomp has

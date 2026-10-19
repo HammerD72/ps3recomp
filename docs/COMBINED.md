@@ -181,3 +181,15 @@ and final platform CI results are recorded in MotorStorm #144. These authored
 contracts do not establish title assets, normal PLAY, gameplay or FPS.
 Downstream native binding and operation-level Vulkan serialization remain
 follow-up work; no curated game vendor tree was replaced by this change.
+
+## Native C++ nonlocal returns (MotorStorm #147)
+
+Atomic branch: `codex/ppu-cpp-nonlocal`. The optional
+`--cpp-nonlocal-jumps` lowering preserves standard setjmp/longjmp returns in
+generated native C++ using context, return PC and saved stack pointer to select
+the receiving frame. Standard symbol names and ABI thunks identify the calls;
+no game addresses are encoded. C output remains the default; this option
+requires a C++ source extension. The executed generated-code regression covers
+recursive unwinding, ABI thunks and foreign-context propagation, and verifies
+that the historical lowering fails. This prerequisite proves return behavior,
+not title boot or performance.
