@@ -204,3 +204,14 @@ executes a missing SDL driver negative control, plus all fourteen hardware
 guest-shader scenes. Loader debug messages about skipped registry entries do
 not count as skipped host tests; requested validation insertion is still
 checked explicitly. This establishes the window contract, not title boot.
+
+## Native profiling observers (MotorStorm #148)
+
+Atomic branch: `codex/native-host-observers`. Restores the generic thread-name
+and bounded load-stage event utilities used by the native host. Load tracing
+is opt-in, serializes concurrent initialization/writes, escapes path fields,
+and reports exhaustion/write failures. Thread log deduplication is synchronized;
+Windows and POSIX thread naming use their respective platform APIs. The
+executed authored fixture checks actual thread names and event contents,
+disabled operation, concurrent initialization and the event budget. These
+observers neither change guest execution nor establish title performance.
