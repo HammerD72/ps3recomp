@@ -11,6 +11,11 @@ static inline unsigned rsx_surface_readback_bpp(unsigned format) {
 static inline unsigned rsx_surface_readback_host_bpp(unsigned format) {
     return (format&31u)==9 ? 4 : rsx_surface_readback_bpp(format);
 }
+static inline unsigned rsx_surface_readback_host_pitch(unsigned width,unsigned format,unsigned alignment) {
+    unsigned bpp=rsx_surface_readback_host_bpp(format),mask=alignment-1;
+    if(!width||!bpp||!alignment||(alignment&mask)||width>(UINT32_MAX-mask)/bpp)return 0;
+    return (width*bpp+mask)&~mask;
+}
 static inline int rsx_surface_readback_rows(void *guest,size_t guest_bytes,unsigned guest_pitch,
     const void *gpu,size_t gpu_bytes,unsigned gpu_pitch,unsigned width,unsigned height,unsigned format) {
     unsigned bpp=rsx_surface_readback_bpp(format),host_bpp=rsx_surface_readback_host_bpp(format);

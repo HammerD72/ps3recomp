@@ -23,6 +23,9 @@ static void device_sync_b8(uint32_t a,uint32_t n,void *context) {
 }
 #define REQUIRE(x,label) do {if(!(x)){fprintf(stderr,"FAIL: %s\n",label);return 1;}}while(0)
 static int check_b8(void) {
+    REQUIRE(rsx_surface_readback_host_pitch(257,9,256)==1280,"B8 uses aligned RGBA8 host footprint");
+    REQUIRE(rsx_surface_readback_host_pitch(UINT32_MAX,9,256)==0,"host footprint overflow rejected");
+    REQUIRE(rsx_surface_readback_host_pitch(257,9,0)==0&&rsx_surface_readback_host_pitch(257,9,3)==0,"invalid host alignment rejected");
     unsigned char host[40],guest[16];
     memset(host,0xee,sizeof host);memset(guest,0xa5,sizeof guest);
     for(unsigned y=0;y<2;y++)for(unsigned x=0;x<3;x++) {
@@ -62,6 +65,10 @@ int main(void){
     REQUIRE(rsx_surface_readback_rows(dst,4,4,rgba,4,4,1,1,8)==0,"RGBA8 surface packing");
     const unsigned char argb[4]={0x78,0x12,0x34,0x56};
     REQUIRE(memcmp(dst,argb,4)==0,"guest ARGB byte order");
+    for(unsigned format=4;format<=5;format++) {
+        REQUIRE(rsx_surface_readback_rows(dst,4,4,rgba,4,4,1,1,format)==0,"XRGB formats remain supported");
+        REQUIRE(dst[0]==255&&memcmp(dst+1,argb+1,3)==0,"XRGB alpha and color bytes preserved");
+    }
     const unsigned char fp32[16]={0,0,0x80,0x3f,0,0,0x80,0xbf,0,0,0x80,0x7f,0x12,0x34,0xc0,0x7f};
     const unsigned char be32[16]={0x3f,0x80,0,0,0xbf,0x80,0,0,0x7f,0x80,0,0,0x7f,0xc0,0x34,0x12};
     REQUIRE(rsx_surface_readback_rows(dst,16,16,fp32,16,16,1,1,12)==0&&memcmp(dst,be32,16)==0,"FP32 bits preserved");

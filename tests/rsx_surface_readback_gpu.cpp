@@ -66,7 +66,8 @@ int main() try {
     list->ResourceBarrier(1,&barrier);
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint={};UINT64 bytes=0;
     device->GetCopyableFootprints(&td,0,1,0,&footprint,nullptr,nullptr,&bytes);
-    if(footprint.Footprint.RowPitch<width*4 || rsx_surface_readback_host_bpp(9)!=4)
+    unsigned host_pitch=rsx_surface_readback_host_pitch(width,9,D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
+    if(host_pitch!=footprint.Footprint.RowPitch || rsx_surface_readback_host_bpp(9)!=4)
         throw std::runtime_error("RGBA8 host storage contract");
     hp.Type=D3D12_HEAP_TYPE_READBACK;
     D3D12_RESOURCE_DESC bd={};bd.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;bd.Width=bytes;
