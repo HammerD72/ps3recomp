@@ -12,6 +12,6 @@ if os.name == "nt":
 with tempfile.TemporaryDirectory(prefix="sys-net-") as tmp:
     binary=Path(tmp)/"fixture"
     subprocess.run(["cc","-std=gnu17","-O1","-UNDEBUG","-Iinclude",
-                    "libs/network/tests/test_sys_net.c","-pthread","-o",str(binary)],
+                    "libs/network/tests/test_sys_net.c","runtime/memory/guest_read_sync.c","-pthread","-o",str(binary)],
                    cwd=root,check=True,timeout=60)
     subprocess.run([str(binary)],check=True,timeout=30)

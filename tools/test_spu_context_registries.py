@@ -13,7 +13,7 @@ root = Path(__file__).resolve().parents[1]
 spu = root / 'runtime/spu'
 common = ['spu_drain.c', 'spu_lockstep.c', 'spu_coherency.c', 'spu_workload.c',
           'spurs_policy.c', 'spurs_job.c', 'spu_tsp_weak.c', 'spu_vm_pagemap.c',
-          'spurs_policy_blob_weak.c', 'spu_interp.c', 'spu_float_simd.c']
+          'spurs_policy_blob_weak.c', 'spu_interp.c', 'spu_float_simd.c', 'spu_task_lifecycle.c']
 failed = []
 with tempfile.TemporaryDirectory(prefix='spu-context-registry-') as tmp:
     for name in ['test_spu_mfc_slots', 'test_spu_mfc_shared_lookup', 'test_spu_coherency', 'test_spu_lockline_peer', 'test_spu_registry_allocation']:
@@ -21,7 +21,8 @@ with tempfile.TemporaryDirectory(prefix='spu-context-registry-') as tmp:
         command = [os.environ.get('CC', 'cc'), '-std=gnu17', '-O1', '-UNDEBUG',
                    '-I' + str(root / 'include'), '-I' + str(spu),
                    '-I' + str(root / 'runtime/platform'),
-                   str(spu / 'tests' / (name + '.c'))]
+                   str(spu / 'tests' / (name + '.c')),
+                   str(root / 'runtime/memory/guest_read_sync.c')]
         if name != 'test_spu_coherency':
             command += [str(spu / c) for c in common if not
                         (name == 'test_spu_registry_allocation' and c == 'spu_coherency.c')]

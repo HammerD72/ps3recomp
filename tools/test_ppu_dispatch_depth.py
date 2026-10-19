@@ -32,6 +32,7 @@ def main():
                         '-ffunction-sections', '-fdata-sections',
                         '-I' + str(tmp), '-I' + str(ROOT / 'include'), '-I' + str(ROOT / 'runtime/platform'),
                         str(ROOT / 'runtime/ppu/ppu_loader.cpp'),
+                        str(ROOT/'runtime/memory/guest_read_sync.c'),
                         str(ROOT / 'runtime/ppu/tests/test_ppu_dispatch_depth.cpp'),
                         *flags, '-o', str(binary)], check=True)
         env = {k: v for k, v in os.environ.items() if not k.startswith(('PPU_', 'PS3_', 'PS3RECOMP_', 'SPU_'))}

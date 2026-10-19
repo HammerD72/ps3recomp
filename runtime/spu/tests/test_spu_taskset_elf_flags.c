@@ -6,33 +6,36 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-typedef int32_t LONG;
-static LONG InterlockedExchange(volatile LONG* value, LONG replacement)
-{ LONG old = *value; *value = replacement; return old; }
-static void Sleep(unsigned ms) { (void)ms; }
-uint8_t* vm_base;
-uint32_t g_ydkj_real_taskset_ea, g_ydkj_real_taskid;
+#include <assert.h>
+#include "spu_workload.h"
+#include "spu_task_lifecycle_trace.h"
+#include "task_vm_fixture.h"
 static unsigned dispatches;
 static const uint8_t* dispatched_image;
 static uint32_t dispatched_size, dispatched_context;
-static int spu_workload_dispatch_async(const uint8_t* image, uint32_t size, uint32_t context)
+static spu_task_owner dispatched_owner, finished_owner;
+int spu_workload_dispatch_owned(const uint8_t* image, uint32_t size, uint32_t context,
+    const uint32_t* task_arg, const spu_task_owner* owner)
 {
     dispatches++; dispatched_image = image; dispatched_size = size;
-    dispatched_context = context; return 1;
+    dispatched_context = context; dispatched_owner = *owner; (void)task_arg; return 1;
 }
 /* PRODUCTION_FUNCTIONS */
 static unsigned passed, failed;
 #define CHECK(test, message) do { if (test) passed++; else { failed++; fprintf(stderr, "FAIL: %s\n", message); } } while (0)
-enum { TASKSET = 0x10000, ELF = 0x30000, CONTEXT = 0x50000 };
+enum { TASKSET = 0x10000, ELF = 0x30000, GUEST_CONTEXT = 0x50000 };
 static void be16(uint8_t* p, uint16_t v) { p[0] = v >> 8; p[1] = v; }
 static void be32(uint8_t* p, uint32_t v)
 { p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v; }
 static void setup(uint32_t flags, int pending)
 {
-    memset(vm_base, 0, 0x400000); memset(s_ts_run, 0, sizeof(s_ts_run));
-    s_ts_lock = 0; dispatches = 0; dispatched_image = NULL;
+    ts_lock();
+    if (dispatched_owner.taskset_ea)
+        spu_task_cancel_locked(&dispatched_owner, vm_base + TASKSET);
+    memset(ts_running(TASKSET), 0, 16);
+    ts_unlock();
+    memset(vm_base, 0, 0x400000); dispatches = 0; dispatched_image = NULL;
     dispatched_size = dispatched_context = 0;
-    g_ydkj_real_taskset_ea = g_ydkj_real_taskid = 0;
     uint8_t* image = vm_base + ELF;
     memcpy(image, "\177ELF", 4); image[4] = 1; image[5] = 2; image[6] = 1;
     be16(image + 0x10, 2); be16(image + 0x12, 23); be32(image + 0x14, 1);
@@ -44,9 +47,15 @@ static void setup(uint32_t flags, int pending)
     uint8_t* ts = vm_base + TASKSET;
     ts[pending ? 0x20 : 0x10] = 0x80; ts[0x30] = 0x80;
     be32(ts + 0x80 + 0x14, ELF | flags);
-    be32(ts + 0x80 + 0x1C, CONTEXT);
+    be32(ts + 0x80 + 0x1C, GUEST_CONTEXT);
     /* Unrelated TaskInfo metadata must survive address normalization. */
     be32(ts + 0x80, 0x11223344); be32(ts + 0x90, 0xAABBCCDD);
+    /* Complete a real captured owner while task zero waits for dispatch. */
+    ts[0x30 + 127/8] |= 1;
+    ts_lock();
+    assert(spu_task_publish_locked(TASKSET, ts, 127, &finished_owner));
+    assert(spu_task_start_locked(&finished_owner, ts));
+    ts_unlock();
 }
 int main(void)
 {
@@ -54,41 +63,46 @@ int main(void)
     for (uint32_t flags = 0; flags < 8; flags++) for (int pending = 0; pending < 2; pending++) {
         setup(flags, pending); uint8_t before[48];
         memcpy(before, vm_base + TASKSET + 0x80, sizeof(before));
-        spu_taskset_task_exited(TASKSET, 127);
+        spu_taskset_task_exited(&finished_owner, 1, NULL, 1);
         CHECK(dispatches == 1, "ready/pending task dispatches with ELF metadata tags");
         CHECK(dispatched_image == vm_base + ELF, "dispatch uses ELF base, not tagged address");
         CHECK(dispatched_size == 100, "real parser receives synthetic ELF header");
-        CHECK(dispatched_context == CONTEXT, "context argument is preserved");
-        CHECK(g_ydkj_real_taskset_ea == TASKSET && g_ydkj_real_taskid == 0,
+        CHECK(dispatched_context == GUEST_CONTEXT, "context argument is preserved");
+        CHECK(dispatched_owner.taskset_ea == TASKSET && dispatched_owner.taskid == 0,
               "requeued task keeps its taskset and slot identity");
         CHECK(memcmp(before, vm_base + TASKSET + 0x80, sizeof(before)) == 0,
               "TaskInfo flags and all other metadata remain unchanged");
-        CHECK((s_ts_run[0].running[0] & 0x80) != 0, "submitted task is marked in host run table");
+        CHECK((ts_running(TASKSET)[0] & 0x80) != 0, "submitted task is marked in host run table");
         CHECK(vm_base[TASKSET + 0x20] == 0, "pending-ready bit consumed on submission");
     }
     setup(1, 0); vm_base[TASKSET + 0x30] = 0;
-    spu_taskset_task_exited(TASKSET, 127);
+    spu_taskset_task_exited(&finished_owner, 1, NULL, 1);
     CHECK(dispatches == 0, "disabled task is not dispatched");
     setup(1, 0); ts_running(TASKSET)[0] = 0x80;
-    spu_taskset_task_exited(TASKSET, 127);
+    spu_taskset_task_exited(&finished_owner, 1, NULL, 1);
     CHECK(dispatches == 0, "already running task is not duplicated");
     setup(1, 0); vm_base[TASKSET + 0x10] = 0;
-    spu_taskset_task_exited(TASKSET, 127);
+    spu_taskset_task_exited(&finished_owner, 1, NULL, 1);
     CHECK(dispatches == 0, "enabled task without work is not dispatched");
     setup(1, 0); vm_base[ELF] = 0;
-    spu_taskset_task_exited(TASKSET, 127);
+    spu_taskset_task_exited(&finished_owner, 1, NULL, 1);
     CHECK(dispatches == 0, "invalid untagged ELF is not dispatched");
-    CHECK(s_ts_run[0].running[0] == 0, "invalid ELF leaves host run table clear");
+    CHECK(ts_running(TASKSET)[0] == 0, "invalid ELF leaves host run table clear");
     CHECK(vm_base[TASKSET + 0x10] == 0x80, "invalid ELF preserves ready state");
     setup(7, 1); be32(vm_base + TASKSET + 0x94, 7);
-    spu_taskset_task_exited(TASKSET, 127);
+    spu_taskset_task_exited(&finished_owner, 1, NULL, 1);
     CHECK(dispatches == 0, "metadata-only null ELF is not dispatched");
     CHECK(vm_base[TASKSET + 0x20] == 0x80, "null ELF preserves pending state");
-    setup(1, 0); vm_base[TASKSET + 0x20] = 0x80; ts_running(TASKSET)[0] = 0x80;
-    spu_taskset_task_exited(TASKSET, 0);
+    setup(1, 0);
+    ts_lock();
+    assert(spu_task_publish_locked(TASKSET, vm_base + TASKSET, 0, &finished_owner));
+    assert(spu_task_start_locked(&finished_owner, vm_base + TASKSET));
+    ts_unlock();
+    vm_base[TASKSET + 0x10] = vm_base[TASKSET + 0x20] = 0x80;
+    spu_taskset_task_exited(&finished_owner, 1, NULL, 1);
     CHECK(dispatches == 0, "exiting task is not restarted");
     CHECK(vm_base[TASKSET + 0x10] == 0 && vm_base[TASKSET + 0x20] == 0 &&
-          vm_base[TASKSET + 0x30] == 0 && s_ts_run[0].running[0] == 0,
+          vm_base[TASKSET + 0x30] == 0 && ts_running(TASKSET)[0] == 0,
           "real exiting task ready/pending/enabled/run state is cleared");
     free(vm_base);
     printf("taskset ELF address flags: %u passed, %u failed\n", passed, failed);

@@ -78,5 +78,6 @@ with tempfile.TemporaryDirectory(prefix='spurs-taskset-size-') as name:
     subprocess.run([os.environ.get('CC','cc'),'-std=gnu17','-O1','-UNDEBUG',
         '-ffunction-sections','-fdata-sections','-I'+str(ROOT),'-I'+str(ROOT/'include'),
         '-I'+str(ROOT/'runtime/spu'),str(fixture),str(ROOT/'libs/spurs/spurs_taskset.c'),
+        str(ROOT/'runtime/memory/guest_read_sync.c'),
         *linker,'-pthread','-lm','-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True,timeout=10,cwd=tmp)

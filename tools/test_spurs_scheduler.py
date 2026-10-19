@@ -9,12 +9,13 @@ with tempfile.TemporaryDirectory(prefix='spurs-scheduler-') as tmp:
     out=Path(tmp)/'test'
     units=['spu_channels','spu_drain','spu_lockstep','spu_coherency','spu_workload',
            'spurs_policy','spurs_job','spu_tsp_weak','spu_vm_pagemap',
-           'spurs_policy_blob_weak','spu_interp']
+           'spurs_policy_blob_weak','spu_interp','spu_float_simd','spu_task_lifecycle']
     subprocess.run([os.environ.get('CC','cc'),'-std=gnu17','-O1','-UNDEBUG',
         '-ffunction-sections','-fdata-sections',
         '-Wl,-dead_strip' if platform.system()=='Darwin' else '-Wl,--gc-sections',
         '-I'+str(r/'include'),'-I'+str(r/'runtime/spu'),'-I'+str(r/'runtime/platform'),
         str(r/'tests/test_spurs_scheduler.c'),
         *[str(r/'runtime/spu'/f'{u}.c') for u in units],
-        str(r/'runtime/platform/win32_compat.c'),'-pthread','-lm','-o',str(out)],check=True)
+        str(r/'runtime/platform/win32_compat.c'),
+        str(r/'runtime/memory/guest_read_sync.c'),'-pthread','-lm','-o',str(out)],check=True)
     subprocess.run([str(out)],check=True,timeout=15)
