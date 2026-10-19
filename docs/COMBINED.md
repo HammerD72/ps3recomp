@@ -255,3 +255,10 @@ The downstream original-target DX12 recheck reaches the original main menu
 and normal-PLAY Grizzly start environment, but retains transparency defects
 and a later CPU-surface-read deadline. Sustained gameplay and 30 FPS remain
 unaccepted. Exact integrated platform CI is a separate check.
+
+
+## B8 CPU surface readback
+
+Integrates `codex/cpu-surface-b8-readback` through `558b562`: guest B8 blue bytes are packed from the existing RGBA8 host storage, with separate validated guest and host strides. The aligned host footprint is overflow checked and agrees with D3D12 GetCopyableFootprints. Existing formats, padding, bounds failures, validation and synchronization deadlines are retained.
+
+The production-backed CPU coherence regression failed before the converter fix, then passed. The game-free D3D12 WARP fixture checks 514 asymmetric-channel pixels, row padding and the host footprint with the debug layer enabled. Modular Linux, Windows Debug/Release, macOS and Linux Vulkan workflows all passed. Native Debug/O1 build f1d72246 is under normal-PLAY recheck for MotorStorm issue 153; these fixtures and CI do not establish native game FPS or complete graphics correctness.
