@@ -326,15 +326,8 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
         # was unoptimised without a word. Duplicating a default -O2 is harmless.
         $<$<CONFIG:Release,RelWithDebInfo>:-O2>
     )
-    # SSE4.1 (any x86-64 since ~2008): pshufb/blendv for spu_shufb, the
-    # hottest SPU op in lifted audio code. Probed rather than assumed: recent
-    # Apple clang rejects the flag outright for arm64 ("unsupported option
-    # '-msse4.1'"), which stops the whole runtime from building there.
-    include(CheckCCompilerFlag)
-    check_c_compiler_flag(-msse4.1 PS3RECOMP_HAS_MSSE41)
-    if(PS3RECOMP_HAS_MSSE41)
-        target_compile_options(ps3recomp_runtime PRIVATE -msse4.1)
-    endif()
+    # Optional byte-shuffle ISA is confined to a capability-checked helper.
+    # Keep the runtime itself runnable on baseline hosts.
 elseif(MSVC)
     # Real cl.exe -- clang-cl reports its id as Clang and is handled above.
     #
@@ -660,6 +653,13 @@ if(PS3RECOMP_BUILD_TESTS OR BUILD_TESTING)
         add_test(NAME pad_file_reports COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_pad_file_reports.py" "$<TARGET_FILE:test_pad_file_normal>" "$<TARGET_FILE:test_pad_file_legacy>")
         set_tests_properties(pad_file_reports PROPERTIES TIMEOUT 40)
     endif()
+    foreach(_shuffle_variant IN ITEMS dispatch scalar)
+        add_executable(test_spu_shufb_${_shuffle_variant} runtime/spu/tests/test_spu_shufb_dispatch.c)
+        target_include_directories(test_spu_shufb_${_shuffle_variant} PRIVATE runtime/spu)
+        add_test(NAME spu_shufb_${_shuffle_variant} COMMAND test_spu_shufb_${_shuffle_variant})
+        set_tests_properties(spu_shufb_${_shuffle_variant} PROPERTIES TIMEOUT 40)
+    endforeach()
+    target_compile_definitions(test_spu_shufb_scalar PRIVATE SPU_SHUFB_FORCE_SCALAR)
     add_executable(test_spu_float_simd runtime/spu/tests/test_spu_float_simd.c runtime/spu/spu_float_simd.c)
     target_include_directories(test_spu_float_simd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/runtime/spu)
     if(NOT WIN32)
