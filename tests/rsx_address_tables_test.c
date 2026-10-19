@@ -63,7 +63,7 @@ static struct {
     ID3D12GraphicsCommandList* cmd_list;
     ID3D12DescriptorHeap* srv_heap;
     ID3D12PipelineState *pipeline_state_vp, *pipeline_state_vp_color;
-    int vp_fp_n;
+    struct { unsigned count; } vp_fp_store;
     struct { ID3D12PipelineState* pso; unsigned sampler_mask; } vp_fp[1];
 } s_d3d;
 static int gpu_pso_retire(void) { if (retire_ok) retired++; return retire_ok; }
@@ -82,7 +82,7 @@ int main(int argc, char** argv)
 #endif
     s_d3d.device = &device; s_d3d.cmd_list = &list;
     ID3D12PipelineState* pso = (ID3D12PipelineState*)(uintptr_t)0x44;
-    s_d3d.vp_fp_n = 1; s_d3d.vp_fp[0].pso = pso; s_d3d.vp_fp[0].sampler_mask = 2;
+    s_d3d.vp_fp_store.count = 1; s_d3d.vp_fp[0].pso = pso; s_d3d.vp_fp[0].sampler_mask = 2;
     rsx_state guest = {0}; s_d3d.current_rsx_state = &guest;
     D3D12DrawRecord dr = {0}; dr.tex[1].set = 1;
     guest.textures[1].address = 0x40404; address_record(&dr);
