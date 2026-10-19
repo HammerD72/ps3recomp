@@ -131,7 +131,7 @@ jobs:
       # cellFontInitializeWithRevision initialises the library the way cellFontInit does.
       - name: Run the cellFont init test
         run: |
-          ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }} -std=gnu17 -I include -o /tmp/test_font_initialize_with_revision libs/font/tests/test_font_initialize_with_revision.c -lm
+          ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }} -std=gnu17 -I include -o /tmp/test_font_initialize_with_revision libs/font/tests/test_font_initialize_with_revision.c runtime/memory/guest_read_sync.c -lm
           /tmp/test_font_initialize_with_revision
 
       # libnet over host sockets (PS3_NET_ONLINE), end to end on loopback: every
@@ -165,7 +165,7 @@ jobs:
       # sceNpCommerce2CreateCtx takes the SDK's five arguments and stores the context id through the fifth.
       - name: Run the Commerce2 CreateCtx test
         run: |
-          ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }} -std=gnu17 -I include -o /tmp/test_np_commerce2 libs/network/tests/test_np_commerce2.c
+          ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }} -std=gnu17 -I include -o /tmp/test_np_commerce2 libs/network/tests/test_np_commerce2.c runtime/memory/guest_read_sync.c
           /tmp/test_np_commerce2
 
 
@@ -329,7 +329,7 @@ jobs:
       # PARAM.SFO is written as a binary PSF and read back (PSF and the old text file).
       - name: Run the savedata PARAM.SFO test
         run: |
-          ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }} -std=gnu17 -I include -o /tmp/test_savedata_param_sfo libs/system/tests/test_savedata_param_sfo.c
+          ${{ matrix.compiler == 'clang' && 'clang' || 'gcc' }} -std=gnu17 -I include -o /tmp/test_savedata_param_sfo libs/system/tests/test_savedata_param_sfo.c runtime/memory/guest_read_sync.c
           /tmp/test_savedata_param_sfo
 
       # The lv2 sync-primitive stress suite (mutex, cond, semaphore, event

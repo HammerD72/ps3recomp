@@ -212,7 +212,7 @@ int main(int argc, char** argv)
                     rsx_fp_decompile_buffered_ex(fp, sizeof fp, 0x40u, 0,
                                                  g_hlsl, sizeof g_hlsl, NULL), 1);
         check("modified COL1 FP HLSL", g_hlsl,
-              "-(abs((saturate(input.col1)).zyxw))");
+              "asfloat(asuint((saturate(input.col1)).zyxw) | 0x80000000u)");
         if (translate("modified COL1 FP", RSX_SHADER_STAGE_FRAGMENT) == 0) {
             check("modified COL1 FP MSL", g_msl, "fragment ");
             check("modified COL1 FP MSL", g_msl, "[[user(locn1)]]");
