@@ -36,6 +36,12 @@ jobs:
       - name: Build
         run: cmake --build build
 
+      - name: CPU surface readback contracts
+        run: |
+          cmake -S . -B build -DPS3RECOMP_BUILD_TESTS=ON
+          cmake --build build --target test_cpu_surface_hle
+          ctest --test-dir build -R '^cpu_surface_hle$' --no-tests=error --output-on-failure
+
       - name: Verify architecture
         run: |
           lipo -info build/libps3recomp_runtime.a

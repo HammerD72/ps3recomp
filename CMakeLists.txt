@@ -656,6 +656,12 @@ if(PS3RECOMP_BUILD_TESTS OR BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_rsx_depth_required.py" "$<TARGET_FILE:test_rsx_depth_surfaces_gpu>")
         set_tests_properties(rsx_depth_required PROPERTIES TIMEOUT 180)
 
+        add_executable(test_rsx_surface_readback_gpu tests/rsx_surface_readback_gpu.cpp)
+        target_include_directories(test_rsx_surface_readback_gpu PRIVATE libs/video)
+        target_link_libraries(test_rsx_surface_readback_gpu PRIVATE d3d12 dxgi dxguid)
+        add_test(NAME rsx_surface_readback_gpu COMMAND test_rsx_surface_readback_gpu)
+        set_tests_properties(rsx_surface_readback_gpu PROPERTIES TIMEOUT 45)
+
         add_executable(test_rsx_depth_alias_gpu tests/rsx_depth_alias_gpu.c)
         target_include_directories(test_rsx_depth_alias_gpu PRIVATE libs/video)
         target_link_libraries(test_rsx_depth_alias_gpu PRIVATE d3d12 dxgi dxguid d3dcompiler)
