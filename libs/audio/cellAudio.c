@@ -73,6 +73,7 @@ extern uint32_t sys_event_queue_create_direct(uint64_t key, int32_t size);
   DEFINE_AUDIO_GUID(ps3r_IID_IMMDeviceEnumerator,  0xA95664D2,0x9614,0x4F35,0xA7,0x46,0xDE,0x8D,0xB6,0x36,0x17,0xE6);
   DEFINE_AUDIO_GUID(ps3r_IID_IAudioClient,         0x1CB9AD4C,0xDBFA,0x4c32,0xB1,0x78,0xC2,0xF5,0x68,0xA7,0x03,0xB2);
   DEFINE_AUDIO_GUID(ps3r_IID_IAudioRenderClient,   0xF294ACFC,0x3146,0x4483,0xA7,0xBF,0xAD,0xDC,0xA7,0xC2,0x60,0xE2);
+  DEFINE_AUDIO_GUID(ps3r_IID_ISimpleAudioVolume, 0x87CE5498,0x68D6,0x44E5,0x92,0x15,0x6D,0xA4,0x7E,0xF8,0x83,0xD8);
 
   /* Map to the names used in the code */
   #define IID_IMMDeviceEnumerator  ps3r_IID_IMMDeviceEnumerator
@@ -309,6 +310,26 @@ static int audio_backend_init(void)
     }
 
     s_wasapi_client->lpVtbl->GetBufferSize(s_wasapi_client, &s_wasapi_buf_frames);
+
+    /* Host preference: mute only this process's session. Preserve guest PCM,
+     * mix/consumption, capture and device scheduling. Verify before Start. */
+    const char* mute_pref = getenv("AUDIO_MUTE");
+    if (mute_pref && *mute_pref && strcmp(mute_pref,"0") != 0) {
+        ISimpleAudioVolume* volume = NULL;
+        BOOL muted = FALSE;
+        hr = s_wasapi_client->lpVtbl->GetService(s_wasapi_client,
+            &ps3r_IID_ISimpleAudioVolume,(void**)&volume);
+        if (SUCCEEDED(hr)) {
+            hr = volume->lpVtbl->SetMute(volume,TRUE,NULL);
+            if (SUCCEEDED(hr)) hr = volume->lpVtbl->GetMute(volume,&muted);
+            volume->lpVtbl->Release(volume);
+        }
+        if (FAILED(hr) || !muted) {
+            fprintf(stderr,"[cellAudio] requested AUDIO_MUTE failed: 0x%08lX muted=%d\n",hr,(int)muted);
+            exit(EXIT_FAILURE);
+        }
+        printf("[cellAudio] AUDIO_MUTE session verified: muted=1\n");
+    }
 
     hr = s_wasapi_client->lpVtbl->GetService(
         s_wasapi_client, &IID_IAudioRenderClient, (void**)&s_wasapi_render);

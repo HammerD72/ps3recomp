@@ -225,3 +225,12 @@ that rejection and exports all fourteen scenes; the hardware/validation runner
 checks complete BMP structure and exact center-pixel agreement with the actual
 readback. This provides observation data for native host integration; authored
 captures do not prove original assets or performance.
+
+## Explicit Windows audio-session mute (MotorStorm #150)
+
+Atomic branch: `codex/windows-session-mute`. `AUDIO_MUTE=1` now sets and
+queries the actual WASAPI process-session mute before playback starts; an
+explicit requested mute failure is fatal. Guest PCM, consumption, device
+scheduling and recording remain intact. `check_audio_mute_host.py` requires
+two real mute/init/shutdown cycles with no backend warnings. This host
+preference establishes no guest audio accuracy or title performance result.
