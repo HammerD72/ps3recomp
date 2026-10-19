@@ -110,4 +110,3 @@ void spu_mfc_release(spu_context* ctx)
     }
     ReleaseSRWLockExclusive(&s_mfc_claim_lock);
 }
-
