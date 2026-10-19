@@ -202,7 +202,7 @@ static void scene_bound_draw(u32 op, u32 base, unsigned units, ID3D12PipelineSta
         scene_timeline_fail("bound metadata path invalid/existing");
     FILE* f=fopen(path,"wb");if(!f)scene_timeline_fail("bound metadata open failed");
     int found=0;
-    for(int q=0;q<s_d3d.vp_fp_n;q++)if(s_d3d.vp_fp[q].pso==pso){
+    for(int q=0;q<s_d3d.vp_fp_store.count;q++)if(s_d3d.vp_fp[q].pso==pso){
         fprintf(f,"shader_id=%u sampler_mask=%08X alias_key=%016llX blend=%08X cmask=%04X\n",
           s_d3d.vp_fp[q].diag_shader_id,s_d3d.vp_fp[q].sampler_mask,
           (unsigned long long)s_d3d.vp_fp[q].alias_key,s_d3d.vp_fp[q].blend,s_d3d.vp_fp[q].cmask);

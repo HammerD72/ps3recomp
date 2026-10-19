@@ -237,12 +237,11 @@ typedef struct {
 } VPFPEntry;
 static void scene_bound_failed_shader(u32 fp, const char* source, ID3DBlob* error);
 static u32 scene_bound_shader(const char* source, ID3DBlob* binary, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* pd);
-/* Guest-FP PSO cache. 16 entries thrashed badly: this title needs far more
- * distinct (fp, vs, blend, rt, cmask, ucode-hash) combinations than that in a
- * single frame, so the FIFO evicted entries that were needed again immediately
- * and ~17 shaders were recompiled EVERY frame -- about half the frame's CPU
- * time. Entries are small (a PSO pointer plus key fields). */
-#define VP_FP_CACHE 256
+/* Pipeline identity remains unchanged. Grow the working set up to a hard
+ * metadata bound; capped FIFO replacement must not shift other entries. */
+#define VP_FP_CACHE_INITIAL 256
+#define VP_FP_CACHE_LIMIT 4096
+#include "rsx_pipeline_cache.h"
 
 /* ---------------------------------------------------------------------------
  * Internal state
@@ -332,8 +331,8 @@ typedef struct {
     unsigned              vp_tex_capacity; /* per-frame VP texture slots    */
     VPVSEntry             vp_vs[VP_VS_CACHE];   /* per-draw decompiled VS cache  */
     int                   vp_vs_n;
-    VPFPEntry             vp_fp[VP_FP_CACHE];   /* guest-FP PSO cache            */
-    int                   vp_fp_n;
+    VPFPEntry*            vp_fp;   /* guest-FP PSO cache            */
+    rsx_pipeline_cache    vp_fp_store;
     u32                   srv_inc;              /* CBV_SRV_UAV descriptor size   */
     /* VP path: latest texture bound per unit (t0-t3). */
     struct { u32 off, raw, w, h, fmt, ctrl1, mips; int cube; int set; } cur_texs[4];
@@ -388,7 +387,7 @@ static void gpu_submission_record(u32 op,const D3D12DrawRecord *dr,ID3D12Pipelin
  if(!s_gpu_submission.active)return;
  rsx_submission_row row={0};row.op=op;row.vertices=dr->vertex_count;row.vb_offset=dr->vb_byte_offset;
  row.is_vp=dr->is_vp;row.fp=dr->fp_addr;row.control=UINT32_MAX; /* Not retained by this backend revision. */row.vs=(u32)dr->vs_idx;
- for(int i=0;i<s_d3d.vp_fp_n;++i)if(s_d3d.vp_fp[i].pso==pso){row.shader=s_d3d.vp_fp[i].diag_shader_id;break;}
+ for(int i=0;i<s_d3d.vp_fp_store.count;++i)if(s_d3d.vp_fp[i].pso==pso){row.shader=s_d3d.vp_fp[i].diag_shader_id;break;}
  row.rt=dr->rt_off;row.zeta=UINT32_MAX; /* Unavailable, not an observed address. */ row.cmask=dr->cmask;row.blend=dr->blend_key;
  row.width=dr->rt_w;row.height=dr->rt_h;row.depth_stencil=UINT64_MAX; /* Not retained by this backend revision. */row.viewport_w=dr->vp_w;row.viewport_h=dr->vp_h;
  row.texture0=dr->tex[0].raw;row.texture1=dr->tex[1].raw;
@@ -2130,6 +2129,20 @@ static u32 dr_cube_mask(const D3D12DrawRecord* dr)
     return m;
 }
 
+static VPFPEntry* vp_fp_cache_acquire(void)
+{
+    int replaced;
+    VPFPEntry* entry = (VPFPEntry*)rsx_pipeline_cache_acquire(&s_d3d.vp_fp_store,
+        sizeof(VPFPEntry), VP_FP_CACHE_INITIAL, VP_FP_CACHE_LIMIT, &replaced);
+    if (!entry) {
+        fprintf(stderr, "[RSXPSO] Pipeline cache allocation/state failure\n");
+        abort();
+    }
+    s_d3d.vp_fp = (VPFPEntry*)s_d3d.vp_fp_store.data;
+    if (replaced && entry->pso) entry->pso->lpVtbl->Release(entry->pso);
+    return entry;
+}
+
 static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, int nrt,
                                           DXGI_FORMAT rtfmt, int exp32, u32 cmask, u32 cull,
                                           u32 cube_mask, const D3D12DrawRecord* dr)
@@ -2192,7 +2205,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     }
 
     s_perf_pso_calls++;
-    for (int i = 0; i < s_d3d.vp_fp_n; i++)
+    for (int i = 0; i < s_d3d.vp_fp_store.count; i++)
         if (s_d3d.vp_fp[i].fp_addr != fp_addr) continue;   /* cheap reject first */
         else if (s_d3d.vp_fp[i].vs_idx == vs_idx &&
             s_d3d.vp_fp[i].vs_hash == vs_hash && s_d3d.vp_fp[i].gen == s_d3d.vp_gen &&
@@ -2223,7 +2236,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     { static int md = -1;
       if (md < 0) { const char* e = getenv("PSOMISSDBG"); md = e ? atoi(e) : 0; }
       if (md) { static int n = 0;
-        for (int i = 0; i < s_d3d.vp_fp_n && n < 12; i++) {
+        for (int i = 0; i < s_d3d.vp_fp_store.count && n < 12; i++) {
             VPFPEntry* q = &s_d3d.vp_fp[i];
             if (q->fp_addr != fp_addr) continue;
             n++;
@@ -2551,29 +2564,23 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     }
     { static int _ok=0; if (_ok++<32) printf("[FP] guest FP pipeline ready (fp=0x%08X)\n", fp_addr); }
 
-    /* insert (evict oldest when full) */
-    if (s_d3d.vp_fp_n >= VP_FP_CACHE) {
-        if (s_d3d.vp_fp[0].pso) s_d3d.vp_fp[0].pso->lpVtbl->Release(s_d3d.vp_fp[0].pso);
-        memmove(&s_d3d.vp_fp[0], &s_d3d.vp_fp[1], sizeof(VPFPEntry) * (VP_FP_CACHE - 1));
-        s_d3d.vp_fp_n = VP_FP_CACHE - 1;
-    }
-    s_d3d.vp_fp[s_d3d.vp_fp_n].fp_addr = fp_addr;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].vs_idx  = vs_idx;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].vs_hash = vs_hash;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].gen     = s_d3d.vp_gen;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].blend   = blend;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].nrt     = nrt;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].rtfmt   = (u32)rtfmt;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].exp32   = exp32;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].ucode_hash = uhash;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].cmask   = cmask;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].cull    = cull;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].cube_mask = cube_mask;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].alias_key = alias_key;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].sampler_mask = rsx_address_sampler_mask(hlsl);
-    s_d3d.vp_fp[s_d3d.vp_fp_n].diag_shader_id = diag_shader_id;
-    s_d3d.vp_fp[s_d3d.vp_fp_n].pso     = pso;
-    s_d3d.vp_fp_n++;
+    VPFPEntry* cached = vp_fp_cache_acquire();
+    cached->fp_addr = fp_addr;
+    cached->vs_idx  = vs_idx;
+    cached->vs_hash = vs_hash;
+    cached->gen     = s_d3d.vp_gen;
+    cached->blend   = blend;
+    cached->nrt     = nrt;
+    cached->rtfmt   = (u32)rtfmt;
+    cached->exp32   = exp32;
+    cached->ucode_hash = uhash;
+    cached->cmask   = cmask;
+    cached->cull    = cull;
+    cached->cube_mask = cube_mask;
+    cached->alias_key = alias_key;
+    cached->sampler_mask = rsx_address_sampler_mask(hlsl);
+    cached->diag_shader_id = diag_shader_id;
+    cached->pso     = pso;
     return pso;
 }
 
@@ -6954,6 +6961,15 @@ void rsx_d3d12_backend_shutdown(void)
 
     address_retire();
     rsx_shader_cache_clear(&s_fp_bytecode,&s_fp_blob_ops);
+    if (!gpu_pso_retire()) {
+        fprintf(stderr, "[RSXPSO] Pipeline shutdown retirement failed\n");
+        abort();
+    }
+    for (unsigned i = 0; i < s_d3d.vp_fp_store.count; ++i)
+        if (s_d3d.vp_fp[i].pso) s_d3d.vp_fp[i].pso->lpVtbl->Release(s_d3d.vp_fp[i].pso);
+    free(s_d3d.vp_fp_store.data);
+    memset(&s_d3d.vp_fp_store, 0, sizeof(s_d3d.vp_fp_store));
+    s_d3d.vp_fp = NULL;
     for(unsigned i=0;i<s_d3d.vp_tex_capacity;i++) {
         VPTexSlot* t=&s_d3d.vp_tex[i];
         if(t->res)t->res->lpVtbl->Release(t->res);

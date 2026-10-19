@@ -54,7 +54,7 @@ static int address_bind(const D3D12DrawRecord* dr, ID3D12PipelineState* pso)
 {
     unsigned mask = pso == s_d3d.pipeline_state_vp ? 1u : 0u;
     int found = pso == s_d3d.pipeline_state_vp || pso == s_d3d.pipeline_state_vp_color;
-    for (int i = 0; i < s_d3d.vp_fp_n; ++i)
+    for (int i = 0; i < s_d3d.vp_fp_store.count; ++i)
         if (s_d3d.vp_fp[i].pso == pso) {
             mask = s_d3d.vp_fp[i].sampler_mask; found = 1; break;
         }
