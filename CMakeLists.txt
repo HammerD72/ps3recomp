@@ -390,6 +390,32 @@ if(PS3RECOMP_BUILD_TESTS)
     # cellVdec through its guest API: the callback-only decoder always, and
     # real H.264 / MPEG-2 decode when FFmpeg is on (libs/codec/tests).
     add_subdirectory(libs/codec/tests)
+    # cellGcm's FIFO walker without a backend: where GET_REPORT writes for
+    # each report DMA context. Links the runtime like the POSIX host below.
+    if(UNIX)
+        add_subdirectory(tests/gcm_reports)
+    endif()
+
+    find_package(Python3 3.10 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME spurs_task_exit_code_initialize
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_spurs_task_exit_code_initialize.py")
+        add_test(NAME spurs_taskset_size
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_spurs_taskset_size.py")
+        add_test(NAME spu_sdcrz
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_spu_sdcrz.py")
+    endif()
+    if(NOT WIN32)
+        find_package(Python3 3.10 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(NAME spu_fnms_zero_extended
+                COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_spu_fnms_zero_extended.py")
+        endif()
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -660,6 +686,11 @@ if(PS3RECOMP_BUILD_TESTS OR BUILD_TESTING)
         add_test(NAME pad_file_reports COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_pad_file_reports.py" "$<TARGET_FILE:test_pad_file_normal>" "$<TARGET_FILE:test_pad_file_legacy>")
         set_tests_properties(pad_file_reports PROPERTIES TIMEOUT 40)
     endif()
+    add_test(NAME ppu_inline_read_sync COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_ppu_inline_read_sync.py"
+        --compiler "${CMAKE_C_COMPILER}")
+    set_tests_properties(ppu_inline_read_sync PROPERTIES TIMEOUT 90)
+
     add_executable(test_spu_float_simd runtime/spu/tests/test_spu_float_simd.c runtime/spu/spu_float_simd.c)
     target_include_directories(test_spu_float_simd PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/runtime/spu)
     if(NOT WIN32)

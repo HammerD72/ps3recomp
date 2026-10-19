@@ -135,3 +135,32 @@ All paired checksums matched. Scalar median was 1.5942413 seconds (range
 1.5630011-1.6152887); SIMD median was 0.4199008 (0.4126122-0.4269420).
 This is a normal-range helper benchmark, not a native gameplay FPS result.
 Native Windows/D3D12 performance and source-recompile acceptance remain open.
+
+
+## Upstream master synchronization (2026-10-19)
+
+MotorStorm issue #145 integrates upstream master `39a3629` (v0.15.0 release
+integration and subsequent golden update) through atomic branch
+`codex/upstream-master-20261019`. Fork master fast-forwards separately; combined
+retains the existing modular corrections and both histories.
+
+Conflict resolutions retain upstream linked MFC ownership and stopped-thread
+range cleanup, with generation invalidation for the fork's TLS lookup cache.
+The upstream extended/double/NEON helpers remain; checked x86 SIMD wraps only the
+six matching single-precision arithmetic helpers. Lifted jobs publish task-exit
+results and release their context engine. Shader translation retains upstream
+shadow/gamma/depth export and color-input clamping, together with the fork's exact
+PK2H lowering and source sign handling. Bit-level GPU fixtures now source raw
+values from unbounded TC0 instead of correctly clamped color inputs.
+
+Generated PPU inline and raw loads synchronize device-owned guest pages before
+loading. The production-header regression failed seven checks without this
+integration, then passed all nine checks with eight synchronization callbacks.
+Plain unmarked memory retains the upstream inline path; diagnostic delegation
+remains intact. Nine targeted Windows CTests pass, including WARP/hardware shader
+bits, checked GPU ownership, exact SIMD, MFC cache/range cleanup and decompilation.
+Standalone SPU oracle/IRET checks and combined platform CI are recorded on #145.
+
+This dependency merge does not replace the curated MotorStorm vendor or prove
+native race performance. Windows Vulkan foundation remains issue #144; retail
+mstream remains parked. The cumulative branch is not an upstream proposal.

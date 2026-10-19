@@ -25,19 +25,19 @@ static void word(u8* p,u32 v) {
 }
 static std::string shader(bool absolute,bool legacy) {
     u8 code[16]={};const u32 swizzle=0xE4u<<9,exec=7u<<18;
-    word(code,(1u<<24)|(15u<<9)|(1u<<13)|1u);
+    word(code,(1u<<24)|(15u<<9)|(4u<<13)|1u);
     word(code+4,swizzle|exec|1u|(1u<<17)|(absolute?(1u<<29):0));
     static char hlsl[65536];
     if(rsx_fp_decompile(code,sizeof code,0x40,hlsl,sizeof hlsl)!=1)exit(2);
     std::string s=hlsl,entry="float4 main(PSInput input) : SV_TARGET";
     auto at=s.find(entry);if(at==s.npos)exit(2);
     s.replace(at,entry.size(),"uint4 main(PSInput input) : SV_TARGET");
-    at=s.find('{',at);s.insert(at+1,"\n input.col0=asfloat(test_bits);\n");
+    at=s.find('{',at);s.insert(at+1,"\n input.tc0=asfloat(test_bits);\n");
     const std::string tail="return (_o == _o) ? _o : (float4)0;";
     at=s.find(tail);if(at==s.npos)exit(2);
     s.replace(at,tail.size(),
         "uint bits=asuint(r[0].x); uint packed=(bits & 0xffff0000u) | "
-        "(f32tof16(input.col0.y) & 65535u); return uint4(packed,bits,asuint(r[0].y),0);");
+        "(f32tof16(input.tc0.y) & 65535u); return uint4(packed,bits,asuint(r[0].y),0);");
     if(legacy){
         const std::string pre="asfloat(asuint(",post=") ^ 0x80000000u)";
         at=s.find(pre);if(at!=s.npos){auto end=s.find(post,at);if(end==s.npos)exit(2);

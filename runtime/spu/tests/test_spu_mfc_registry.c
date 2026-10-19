@@ -83,15 +83,9 @@ int main(void) {
     check(stable, "warm lookups preserve engine identity");
     check(private, "queue and tag ownership stays private");
     check(warm_locks == 0, "32000 warm lookups acquire no registry locks");
-    /* This thread holds a cached overflow pointer; another releases it while
+    /* This thread holds a cached engine pointer; another releases it while
      * its SPU is stopped. Reusing the same context address must be fresh. */
     unsigned victim = 0;
-    for (unsigned i = 0; i < 32; ++i) {
-        int inline_slot = 0;
-        for (unsigned j = 0; j < SPU_MAX_CONTEXTS; ++j)
-            if (engines[i] == &s_mfc_slots[j].mfc) inline_slot = 1;
-        if (!inline_slot) { victim = i; break; }
-    }
     (void)mfc_for(&contexts[victim]);
     HANDLE releaser = CreateThread(NULL, 0, release_other_thread, &contexts[victim], 0, NULL);
     if (!releaser || WaitForSingleObject(releaser, 10000) != WAIT_OBJECT_0) return 2;
@@ -104,27 +98,16 @@ int main(void) {
     if (victim != 31)
         check(mfc_for(&contexts[victim])->tag_mask == 0x800,
               "unrelated release preserves live engine payload");
-    unsigned inline_owner = 32, overflow_owner = 32;
-    mfc_engine *overflow_engine = NULL;
-    for (unsigned i = 0; i < 31; ++i) {
-        if (i == victim) continue;
-        mfc_engine *e = mfc_for(&contexts[i]);
-        int inline_slot = 0;
-        for (unsigned j = 0; j < SPU_MAX_CONTEXTS; ++j)
-            if (e == &s_mfc_slots[j].mfc) inline_slot = 1;
-        if (inline_slot) inline_owner = i;
-        else { overflow_owner = i; overflow_engine = e; }
-    }
-    if (inline_owner == 32 || overflow_owner == 32) return 2;
-    spu_mfc_release(&contexts[inline_owner]);
-    check(mfc_for(&contexts[overflow_owner]) == overflow_engine &&
-          overflow_engine->tag_mask == 0x100 + overflow_owner,
-          "free inline slot does not migrate an existing overflow owner");
+    mfc_engine *retained = mfc_for(&contexts[1]);
+    spu_mfc_release(&contexts[2]);
+    check(mfc_for(&contexts[1]) == retained && retained->tag_mask == 0x101,
+          "another released owner does not migrate a live engine");
+    (void)mfc_for(&contexts[victim]);
+    spu_mfc_forget_range((uintptr_t)&contexts[0], (uintptr_t)&contexts[1]);
+    check(mfc_for(&contexts[victim])->tag_mask == 0,
+          "stopped-thread range cleanup invalidates cached address reuse");
     for (unsigned i = 0; i < 32; ++i) spu_mfc_release(&contexts[i]);
-    int empty = 1;
-    for (unsigned i = 0; i < SPU_MAX_CONTEXTS; ++i) if (s_mfc_slots[i].ctx) empty = 0;
-    check(empty, "all inline owners released");
-    check(s_mfc_overflow == NULL, "all private overflow engines released");
+    check(s_mfc_slots == NULL, "all private engines released");
     printf("checks=%u failures=%u warm_locks=%d\n", checks, failures, warm_locks);
     return failures ? 1 : 0;
 }

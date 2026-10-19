@@ -28,20 +28,21 @@ static std::string shader(unsigned mask,bool half_source,bool omit) {
     u8 code[32]={};u8* ins=code;
     const u32 swizzle=0xE4u<<9,exec=7u<<18;
     if(half_source){
-        word(ins,(1u<<24)|(15u<<9)|(1u<<7)|(1u<<1)|(1u<<13));
+        word(ins,(1u<<24)|(15u<<9)|(1u<<7)|(1u<<1)|(4u<<13));
         word(ins+4,swizzle|exec|1u);ins+=16;
     }
-    word(ins,((omit?0u:0x24u)<<24)|(mask<<9)|(1u<<13)|1u);
+    word(ins,((omit?0u:0x24u)<<24)|(mask<<9)|(4u<<13)|1u);
     word(ins+4,swizzle|exec|(half_source?(1u<<8)|(1u<<2):1u));
     static char hlsl[65536];
     int n=rsx_fp_decompile(code,half_source?32:16,0x40,hlsl,sizeof hlsl);
     if(n!=(half_source?2:1)){fprintf(stderr,"decompile failed\n");exit(2);}
     std::string s=hlsl;
-    // Supply exact source bits at PS entry, avoiding vertex interpolation of -0.
+    // TC0 is unbounded; COL0/COL1 are correctly clamped before FP execution.
+    // Supply exact source bits at PS entry, avoiding interpolation of -0.
     std::string entry="float4 main(PSInput input) : SV_TARGET";
     auto at=s.find(entry);if(at==s.npos){fprintf(stderr,"missing entry\n");exit(2);}
     s.replace(at,entry.size(),"uint4 main(PSInput input) : SV_TARGET");
-    at=s.find('{',at);s.insert(at+1,"\n input.col0=asfloat(test_bits);\n");
+    at=s.find('{',at);s.insert(at+1,"\n input.tc0=asfloat(test_bits);\n");
     const std::string tail="return (_o == _o) ? _o : (float4)0;";
     at=s.find(tail);if(at==s.npos){fprintf(stderr,"missing export\n");exit(2);}
     // Integer export observes packed bits, including float subnormals, directly.
