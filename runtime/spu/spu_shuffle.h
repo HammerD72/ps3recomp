@@ -15,6 +15,15 @@
 #define SPU_SHUFB_X86 0
 #endif
 
+/* AArch64's existing NEON path is part of the host ABI, not an optional
+ * process-wide ISA increase. Preserve it when integrating with newer trees. */
+#if !defined(SPU_SHUFB_FORCE_SCALAR) && defined(__aarch64__) && defined(__ARM_NEON)
+#define SPU_SHUFB_NEON 1
+#include <arm_neon.h>
+#else
+#define SPU_SHUFB_NEON 0
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -47,6 +56,8 @@ static inline int spu_shufb_simd_available(void) {
 #else
     return __builtin_cpu_supports("ssse3") != 0;
 #endif
+#elif SPU_SHUFB_NEON
+    return 1;
 #else
     return 0;
 #endif
@@ -76,9 +87,31 @@ static inline u128 spu_shufb_ssse3(u128 a, u128 b, u128 c) {
 }
 #endif
 
+#if SPU_SHUFB_NEON
+/* NEON version: tbl over the 32-byte {a,b} concatenation. SPU byte P lives at
+ * host byte P^3 (each word's bytes reversed), so rev32 into SPU order,
+ * select, and rev32 back. */
+static inline u128 spu_shufb_neon(u128 a, u128 b, u128 c) {
+    uint8x16x2_t t;
+    t.val[0] = vrev32q_u8(vld1q_u8(a._u8));
+    t.val[1] = vrev32q_u8(vld1q_u8(b._u8));
+    const uint8x16_t C = vrev32q_u8(vld1q_u8(c._u8));
+    uint8x16_t r = vqtbl2q_u8(t, vandq_u8(C, vdupq_n_u8(0x1F)));
+    /* Special selectors: 10x -> 0x00, 110 -> 0xFF, 111 -> 0x80. */
+    const uint8x16_t m80 = vtstq_u8(C, vdupq_n_u8(0x80));
+    const uint8x16_t mC0 = vceqq_u8(vandq_u8(C, vdupq_n_u8(0xC0)), vdupq_n_u8(0xC0));
+    const uint8x16_t mE0 = vceqq_u8(vandq_u8(C, vdupq_n_u8(0xE0)), vdupq_n_u8(0xE0));
+    const uint8x16_t special = vbslq_u8(mE0, vdupq_n_u8(0x80), mC0);
+    r = vrev32q_u8(vbslq_u8(m80, special, r));
+    u128 out; vst1q_u8(out._u8, r); return out;
+}
+#endif
+
 static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
 #if SPU_SHUFB_X86
     if (spu_shufb_simd_available()) return spu_shufb_ssse3(a, b, c);
+#elif SPU_SHUFB_NEON
+    return spu_shufb_neon(a, b, c);
 #endif
     return spu_shufb_ref(a, b, c);
 }
