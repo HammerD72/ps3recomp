@@ -86,3 +86,22 @@ next investigation to guest progress. No full-game acceptance follows, and the
 selective trial remains off the game's main branch.
 The merged fork runtime as a whole has not been substituted into the native game.
 Keep the atomic branches for later review; no upstream PR has been opened.
+
+
+## Extended single-precision value correction
+
+Atomic `eccae411` plus runner linkage fix `79ac64c` are integrated as
+`057c56c`/`492fdfa`. The generic FI/FA/FS/FM/FMA/FMS/FNMS value helpers implement
+IBM SPU ISA v1.2 extended finite exponents, FTZ, positive zero, truncation,
+saturation and exact fused products. Authored exact-rational tests exercise
+36,816 lanes through actual helpers and actual instruction dispatch, including
+the zero-normalization NaN regression. Both modes and existing 63 helper tests
+pass on the atomic branch; its Windows and Linux CI pass at `79ac64c`.
+
+MotorStorm selectively adopted the two runtime headers in
+[PR 117](https://github.com/robbe1912/motorstorm-mv-recomp/pull/117).
+Its native observation retains original bike/rider draws and finite sampled
+preview velocities/transforms, but still has material/shader defects and has
+not demonstrated race entry or a minimum frame rate. FPSCR accumulation,
+comparisons/conversions and hardware identity of estimate tables are outside
+this value correction. The whole combined runtime is not overlaid onto the game.
