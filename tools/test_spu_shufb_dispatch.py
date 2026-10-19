@@ -53,7 +53,7 @@ def main():
             assembly = subprocess.check_output([disassembler, '-d', str(obj)], text=True)
             (out/f'{name}.asm').write_text(assembly)
             has_shuffle = bool(re.search(r'\bpshufb\b', assembly))
-            assert has_shuffle == (name != 'scalar'), f'{name}: expected baseline checked SIMD code={name != "scalar"}, found={has_shuffle}'
+            assert has_shuffle == (name != 'scalar'), f'{name}: expected baseline checked SIMD code={name != "scalar"}, found={has_shuffle}\ncompiler={compile_cmd}\ndisassembler={disassembler}\n{assembly}'
     if args.benchmark:
         rows = []
         for pair in range(5):
