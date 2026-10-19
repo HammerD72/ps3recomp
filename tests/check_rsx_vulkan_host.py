@@ -25,6 +25,19 @@ def main():
     env["PS3RECOMP_VK_GUEST_PROGRAMS"] = "1"
     # This contract checks offscreen rendering. Window acceptance is separate.
     env.pop("PS3RECOMP_VK_WINDOW", None)
+    env.pop("PS3RECOMP_VK_REQUIRE_WINDOW", None)
+    # A native window request must never be accepted as headless success.
+    rejected_env = env.copy()
+    rejected_env["PS3RECOMP_VK_REQUIRE_WINDOW"] = "1"
+    rejected_env["PS3RECOMP_VK_GUEST_PROGRAMS"] = "0"
+    rejected_env["SDL_VIDEODRIVER"] = "ps3recomp-invalid-driver"
+    rejected = subprocess.run([str(exe), "--frames=2"], env=rejected_env,
+                              capture_output=True, text=True, timeout=45)
+    rejected_log = rejected.stdout + rejected.stderr
+    (args.output / "required-window.log").write_text(rejected_log, encoding="utf-8")
+    assert rejected.returncode != 0, "required window silently became headless"
+    assert "required Vulkan window is unavailable" in rejected_log
+    assert "presented" not in rejected_log, "failed window produced frames"
     if args.validation:
         env["VK_INSTANCE_LAYERS"] = "VK_LAYER_KHRONOS_validation"
         env["VK_LOADER_DEBUG"] = "layer"
@@ -48,7 +61,7 @@ def main():
         else:
             assert proc.returncode == 0, f"{name}: exit {proc.returncode}; see log"
             assert "register-file draw engine path" in log, f"{name}: wrong path"
-            assert "nothing to check" not in log and "skipping" not in log.lower(), name
+            assert "nothing to check" not in log and not re.search(r"\[host\][^\r\n]*skipping", log, re.I), name
             assert "VUID" not in log and "Validation Error" not in log, name
             assert " FAIL" not in log, name
             selected = re.search(r"using device (\d+): ([^\r\n]+)", log)

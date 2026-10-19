@@ -1651,7 +1651,7 @@ static void vk_window_drop(const char* why)
 
 static void vk_window_open(const char* title)
 {
-    if (!vk_env_on("PS3RECOMP_VK_WINDOW")) return;
+    if (!vk_env_on("PS3RECOMP_VK_WINDOW") && !vk_env_on("PS3RECOMP_VK_REQUIRE_WINDOW")) return;
     /* The embedding executable owns main; SDL2main is not linked. */
     SDL_SetMainReady();
     if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
@@ -3259,6 +3259,10 @@ static int vk_init_all(u32 width, u32 height, const char* title)
       s_vk.dump_every = (e && atoi(e) > 0) ? (u32)atoi(e) : 1; }
 
     vk_window_open(title);           /* no-op unless PS3RECOMP_VK_WINDOW is set */
+    if (vk_env_on("PS3RECOMP_VK_REQUIRE_WINDOW") && !s_vk.windowed) {
+        VK_LOG("required Vulkan window is unavailable\n");
+        return -1;
+    }
     if (vk_load_library()) return -1;
 
     VkApplicationInfo app = { .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -3373,6 +3377,10 @@ static int vk_init_all(u32 width, u32 height, const char* title)
             vk_create_swapchain())
             vk_window_drop("the swapchain could not be created");
     }
+    if (vk_env_on("PS3RECOMP_VK_REQUIRE_WINDOW") && !s_vk.windowed) {
+        VK_LOG("required Vulkan window/swapchain is unavailable\n");
+        return -1;
+    }
     return 0;
 }
 
@@ -3461,7 +3469,7 @@ void rsx_vulkan_backend_shutdown(void)
 
 int rsx_vulkan_backend_pump_messages(void)
 {
-    if (!s_vk.windowed) return 0;
+    if (!s_vk.windowed) return vk_env_on("PS3RECOMP_VK_REQUIRE_WINDOW") ? -1 : 0;
     int quit = 0;
     SDL_Event e;
     while (SDL_PollEvent(&e)) {

@@ -193,3 +193,14 @@ requires a C++ source extension. The executed generated-code regression covers
 recursive unwinding, ABI thunks and foreign-context propagation, and verifies
 that the historical lowering fails. This prerequisite proves return behavior,
 not title boot or performance.
+
+## Required native Vulkan window (MotorStorm #146)
+
+Atomic branch: `codex/vulkan-required-window`. Hosts may request
+`PS3RECOMP_VK_REQUIRE_WINDOW=1`; failed SDL/WSI initialization then fails the
+backend, and loss of the required window asks the host to stop. Optional
+offscreen operation remains available. The public authored-host regression
+executes a missing SDL driver negative control, plus all fourteen hardware
+guest-shader scenes. Loader debug messages about skipped registry entries do
+not count as skipped host tests; requested validation insertion is still
+checked explicitly. This establishes the window contract, not title boot.

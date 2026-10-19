@@ -39,6 +39,9 @@
  *                             every test gives the same result with or without
  *                             it; if the window cannot be opened the run
  *                             continues headless and says why.
+ *   PS3RECOMP_VK_REQUIRE_WINDOW=1
+ *                             require a working window and swapchain; init
+ *                             fails explicitly if either cannot be created.
  *   PS3RECOMP_VK_FULLSCREEN=1 with a window: borderless full screen.
  *   PS3RECOMP_VK_HOLD=<sec>   with a window: keep the last frame on screen
  *                             this long before shutdown closes it.
