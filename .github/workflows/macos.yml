@@ -39,8 +39,8 @@ jobs:
       - name: CPU surface readback contracts
         run: |
           cmake -S . -B build -DPS3RECOMP_BUILD_TESTS=ON
-          cmake --build build --target test_cpu_surface_hle
-          ctest --test-dir build -R '^cpu_surface_hle$' --no-tests=error --output-on-failure
+          cmake --build build --target test_cpu_surface_hle test_rsx_indexed_strip
+          ctest --test-dir build -R '^(cpu_surface_hle|rsx_indexed_strip)$' --no-tests=error --output-on-failure
 
       - name: Verify architecture
         run: |
