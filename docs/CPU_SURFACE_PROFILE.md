@@ -24,3 +24,9 @@ default-off clocks, direct servicing, clock failure and an over-accounting
 mutant. It models the copy stages; it does not execute D3D12. Real GPU pixel
 packing remains covered by `rsx_surface_readback_gpu`, and actual latency needs
 a native application capture with matched identities and correct output.
+
+## Completed batch servicing
+
+Pending reads are also serviced at the end of a submitted render batch, after capture, presentation and allocator/fence advancement. This avoids waiting for an entire GCM drain before the next message pump. The existing pump remains. The completion helper rejects an active command-recording state; all existing resource-state transitions, generation checks, copies, GPU fences and errors remain. Empty/early-return render calls do not claim a submitted batch.
+
+Records include client/renderer thread IDs and absolute QPC queued/started/finished/returned ticks. Match intervals only with the same QPC frequency; retain overlapping requests as intervals rather than exclusive CPU cost. The authored production-path test proves a published model pixel reaches the requester and releases its event at completion without a message pump; premature-recording and missing-service mutations fail. Real D3D12 pixel packing is separately covered by the GPU fixture.
