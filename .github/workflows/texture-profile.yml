@@ -1,0 +1,32 @@
+name: DX12 texture profile
+on:
+  push:
+    branches: [master, main, combined, codex/dx12-texture-profile]
+    paths:
+      - libs/video/rsx_texture_profile.h
+      - libs/video/rsx_d3d12_backend.c
+      - tools/test_rsx_texture_profile.py
+      - .github/workflows/texture-profile.yml
+  pull_request:
+    paths:
+      - libs/video/rsx_texture_profile.h
+      - libs/video/rsx_d3d12_backend.c
+      - tools/test_rsx_texture_profile.py
+      - .github/workflows/texture-profile.yml
+  workflow_dispatch:
+jobs:
+  profile:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - run: python tools/test_rsx_texture_profile.py
