@@ -66,9 +66,9 @@ class Pipeline(unittest.TestCase):
         # Compile the runtime's actual registry/fingerprint/ELF-size blocks
         # unchanged, without the unrelated DMA/job/platform dependency graph.
         workload = (runtime / 'spu_workload.c').read_text()
-        workload = workload[workload.index('uint64_t spu_workload_fingerprint('):
+        workload = workload[workload.index('static uint64_t spu_workload_fingerprint_raw('):
                             workload.index('/* ---- dispatch')]
-        (self.root / 'workload.c').write_text('#include "spu_workload.h"\n#include <stdio.h>\n#include <string.h>\n' + workload)
+        (self.root / 'workload.c').write_text('#include "spu_workload.h"\n#include "spu_fingerprint_cache.h"\n#include <stdio.h>\n#include <string.h>\n' + workload)
         channels = (runtime / 'spu_channels.c').read_text()
         channels = channels[channels.index('typedef void (*spu_fn)'):
                             channels.index('/* Which image registered')]
