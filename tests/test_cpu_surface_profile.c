@@ -35,7 +35,8 @@ static void cpu_surface_fail(const char *operation,int result){fprintf(stderr,"F
 /* PRODUCTION_DECLARATIONS */
 /* PRODUCTION_HELPERS */
 static void cpu_surface_read(u32 address,u32 bytes){
-    if(address!=0x20120 || bytes!=2)abort();read_calls++;
+    if(address!=0x20120 || bytes!=2)abort();
+    read_calls++;
     if(s_cpu_surface_profile_active){
         RsxCpuSurfaceProfile *p=s_cpu_surface_profile_active;
         p->allocation=2;p->prior_fence=3;p->commands=5;p->copy_fence=7;p->packing=11;
