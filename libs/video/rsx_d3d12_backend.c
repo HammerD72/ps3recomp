@@ -5424,6 +5424,7 @@ skip_dump_consider: ;
             s_tt0 = tnow;
         }
     }
+    cpu_surface_frame_complete();
 }
 
 /* The queued records own constant/SRV slots and uploaded geometry until the

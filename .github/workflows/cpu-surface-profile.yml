@@ -1,7 +1,7 @@
 name: CPU surface latency accounting
 on:
   push:
-    branches: [combined, codex/d3d12-cpu-surface-profile]
+    branches: [combined, codex/d3d12-cpu-surface-profile, codex/d3d12-cpu-surface-boundary]
   pull_request:
 jobs:
   accounting:
