@@ -61,7 +61,7 @@ def main():
     assert bad.returncode==1 and 'overlapping/over-accounted stages rejected' in bad.stderr
     completion=function(source,'cpu_surface_frame_complete')
     assert completion.count('cpu_surface_service();')==1
-    absent=out/'missing-service.c';absent.write_text(fixture.replace(completion,completion.replace('cpu_surface_service();','/* deliberate missing completion */')))
+    absent=out/'missing-service.c';absent.write_text(fixture.replace(completion,completion.replace('cpu_surface_service();','(void)&cpu_surface_service; /* deliberate missing completion */')))
     missing=out/('missing-service.exe' if os.name=='nt' else 'missing-service')
     changed=[str(absent) if x==str(c) else x for x in cmd]
     if os.name=='nt':changed=[('/Fe'+str(missing)) if x.startswith('/Fe') else x for x in changed]
