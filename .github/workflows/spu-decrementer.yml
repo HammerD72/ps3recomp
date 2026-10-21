@@ -1,0 +1,30 @@
+name: SPU decrementer
+on:
+  push:
+    branches: [master, main, combined, codex/spu-decrementer-regression]
+    paths:
+      - runtime/spu/spu_channels.c
+      - tools/test_spu_decrementer.py
+      - .github/workflows/spu-decrementer.yml
+  pull_request:
+    paths:
+      - runtime/spu/spu_channels.c
+      - tools/test_spu_decrementer.py
+      - .github/workflows/spu-decrementer.yml
+  workflow_dispatch:
+jobs:
+  timer:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - run: python tools/test_spu_decrementer.py
