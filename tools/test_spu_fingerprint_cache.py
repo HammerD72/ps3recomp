@@ -83,6 +83,18 @@ int main(int argc,char**argv){assert(argc==2);int enabled=!strcmp(argv[1],"on");
         p[positions[i]]^=0xa5;
         assert(spu_fp_compute(&core,p,SPU_FP_MAX_BUFFER,spu_workload_fingerprint_raw)==@LARGE@ULL);
     }
+    /* Overlapping views and identical addresses with different lengths must
+     * each validate their own full byte range after a shared-byte mutation. */
+    const uint64_t alias_hashes[]={@ALIASES@};
+    for(unsigned changed=0;changed<2;changed++){
+        if(changed)p[4095]^=0xa5;
+        for(unsigned repeat=0;repeat<2;repeat++){
+            assert(spu_fp_compute(&core,p,4096,spu_workload_fingerprint_raw)==alias_hashes[changed*3]);
+            assert(spu_fp_compute(&core,p,8192,spu_workload_fingerprint_raw)==alias_hashes[changed*3+1]);
+            assert(spu_fp_compute(&core,p+16,4096,spu_workload_fingerprint_raw)==alias_hashes[changed*3+2]);
+        }
+    }
+    p[4095]^=0xa5;
     assert(spu_fp_compute(&core,NULL,0,spu_workload_fingerprint_raw)==1469598103934665603ULL);
     assert(spu_fp_compute(&core,p,SPU_FP_MAX_BUFFER+1,spu_workload_fingerprint_raw)==@OVERSIZED@ULL);
     spu_fp_clear(&core);assert(!core.retained_bytes);
@@ -123,7 +135,12 @@ def main():
     mutated=[]
     for position in (0,15,16,63,64,131072,262143):
         data[position]^=0xa5;mutated.append(str(oracle(data[:262144]))+'ULL');data[position]^=0xa5
-    source=SOURCE.replace('@RAW@',raw).replace('@WRAPPER@',wrapper).replace('@SMALL@',str(oracle(data[:4096]))).replace('@LARGE@',str(oracle(data[:262144]))).replace('@OVERSIZED@',str(oracle(data))).replace('@MUTATIONS@',','.join(mutated))
+    aliases=[]
+    for changed in (False,True):
+        if changed:data[4095]^=0xa5
+        aliases.extend(str(oracle(view))+'ULL' for view in (data[:4096],data[:8192],data[16:4112]))
+    data[4095]^=0xa5
+    source=SOURCE.replace('@RAW@',raw).replace('@WRAPPER@',wrapper).replace('@SMALL@',str(oracle(data[:4096]))).replace('@LARGE@',str(oracle(data[:262144]))).replace('@OVERSIZED@',str(oracle(data))).replace('@MUTATIONS@',','.join(mutated)).replace('@ALIASES@',','.join(aliases))
     compiler=os.environ.get('MV_CLANG') or os.environ.get('CC') or shutil.which('clang-cl' if os.name=='nt' else 'cc')
     assert compiler,'C compiler required'
     with tempfile.TemporaryDirectory() as temporary:
