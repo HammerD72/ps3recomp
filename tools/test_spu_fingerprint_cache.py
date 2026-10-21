@@ -19,6 +19,7 @@ SOURCE=r'''
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
+#include <stddef.h>
 #ifdef _WIN32
 #define TEST_TLS __declspec(thread)
 #else
@@ -27,8 +28,20 @@ SOURCE=r'''
 static TEST_TLS unsigned allocations,frees,fail_alloc,raw_calls;
 typedef struct{unsigned calls,allocs,freed;} worker_result;
 static TEST_TLS worker_result* active_result;
-static void* allocate(size_t n){if(fail_alloc)return NULL;void*p=malloc(n);if(p)allocations++;return p;}
-static void release(void*p){if(p)frees++;if(active_result)active_result->freed=frees;free(p);}
+/* Keep observer ownership with the allocation: C TLS may already have been
+ * torn down when pthread key destructors run (notably on macOS). */
+typedef union { max_align_t alignment; worker_result* owner; } allocation_header;
+static void* allocate(size_t n){
+    if(fail_alloc)return NULL;
+    allocation_header*h=malloc(sizeof(*h)+n);
+    if(!h)return NULL;
+    h->owner=active_result;allocations++;return h+1;
+}
+static void release(void*p){
+    if(!p)return;
+    allocation_header*h=(allocation_header*)p-1;
+    frees++;if(h->owner)h->owner->freed++;free(h);
+}
 #define SPU_FP_ALLOC allocate
 #define SPU_FP_FREE release
 #include "spu_fingerprint_cache.h"
