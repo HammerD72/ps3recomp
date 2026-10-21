@@ -1,0 +1,24 @@
+name: SPU resident lookup
+on:
+  push:
+    branches: [master, main, combined, codex/spu-resident-lookup]
+    paths: ['runtime/spu/spu_channels.c', 'runtime/spu/spu_context.h', 'tools/test_spu_resident_lookup.py', '.github/workflows/spu-resident-lookup.yml']
+  pull_request:
+    paths: ['runtime/spu/spu_channels.c', 'runtime/spu/spu_context.h', 'tools/test_spu_resident_lookup.py', '.github/workflows/spu-resident-lookup.yml']
+  workflow_dispatch:
+jobs:
+  ownership:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - run: python tools/test_spu_resident_lookup.py
