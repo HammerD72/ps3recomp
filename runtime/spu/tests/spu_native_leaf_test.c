@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdatomic.h>
 #include <signal.h>
+#include <xmmintrin.h>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -48,6 +49,7 @@ static spu_context* program(unsigned value) {
     if (options&2) { c->int_enable=1;c->event_status=c->event_mask=2; }
     if (options&4) { memcpy(shared_ls,c->ls,0x40000);c->ls=shared_ls; }
     if (options&8) be32(c->ls+0x204,0x00002001u);
+    if (options&16) c->image_id=-1;
     return c;
 }
 static void execute(spu_context* c,const spu_native_leaf_plan* plan) {
@@ -129,6 +131,7 @@ int main(int argc,char** argv) {
     nested=1;compare(42,0,0,1);nested=0;
     g_spu_ls_watch_n=1;compare(42,0,0,0);g_spu_ls_watch_n=0;
     for(options=1;options<=8;options*=2) compare(42,0,0,0);
+    options=16;compare(42,0,0,1);compare(43,0,0,0);
     options=0;
     spu_context* c=program(42);c->int_enable=1;c->event_mask=c->event_status=2;
     int before=atomic_load(&calls);spu_interp_run(c,0x100);

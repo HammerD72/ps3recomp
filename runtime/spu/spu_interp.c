@@ -530,7 +530,7 @@ static uint32_t spu_interp_run_until_scoped_body(spu_context* ctx, uint32_t star
             !getenv("SPU_LS_LOWREAD") && !getenv("SPU_LS_WATCH") &&
             !getenv("SPU_SMC_WATCH") && !getenv("SPU_PCHIST")) {
             uint32_t last=ctx->pc;
-            uint64_t used=native_try(ctx,stop_lsa,budget ? budget-steps : UINT64_MAX,&last);
+            uint64_t used=native_try(ctx,stop_lsa,(budget ? budget : UINT64_MAX)-steps,&last);
             if (used) { steps+=used; g_spu_interp_last_pc=last; continue; }
         }
         if (ctx->image_id >= 0 && spu_lifted_lookup(ctx, ctx->pc)) {
