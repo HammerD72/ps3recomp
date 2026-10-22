@@ -52,11 +52,12 @@ for variable in ['SPU_LS_LOWREAD','SPU_SMC_WATCH','SPU_PCHIST','SPU_TRACE_CALLS'
 source=(spu/'spu_interp.c').read_text()
 for name,before,after in [
     ('missing-seam','if (native_count && ctx->pc<0x40000','if (0 && ctx->pc<0x40000'),
-    ('stop-bypass','(stop>=leaf->begin && stop<leaf->end)','0'),
+    ('stop-bypass','(stop && stop>=leaf->begin && stop<leaf->end)','0'),
+    ('zero-stop-sentinel','(stop && stop>=leaf->begin && stop<leaf->end)','(stop>=leaf->begin && stop<leaf->end)'),
     ('budget-bypass','if (plan.instructions>remaining) continue;','/* omitted budget admission */'),
 ]:
     assert source.count(before)==1,name
     path=out/(name+'.c');path.write_text(source.replace(before,after))
     r=run(build(name,path))
     assert r.returncode==1 and 'FAIL real host execution count' in r.stderr,r.stdout+r.stderr
-print('PASS actual interpreter native-leaf state/stop/budget/guard/FP/thread tests; three unsafe dispatch mutants rejected')
+print('PASS actual interpreter native-leaf state/stop/budget/guard/FP/thread tests; four unsafe dispatch mutants rejected')

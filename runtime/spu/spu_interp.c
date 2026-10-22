@@ -84,7 +84,7 @@ static uint64_t native_try(spu_context* ctx,uint32_t stop,uint64_t remaining,
     native_busy=1;
     for (unsigned i=0;i<native_count;i++) {
         const spu_native_leaf* leaf=&native_leaves[i];
-        if (leaf->begin!=pc || (stop>=leaf->begin && stop<leaf->end)) continue;
+        if (leaf->begin!=pc || (stop && stop>=leaf->begin && stop<leaf->end)) continue;
         spu_native_leaf_plan plan={0};
         int result=leaf->prepare(ctx,remaining,&plan);
         if (result<0 || result>1) native_error("prepare result");

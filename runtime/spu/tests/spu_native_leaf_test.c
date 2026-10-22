@@ -76,6 +76,10 @@ static spu_context* program(unsigned value) {
     if (options&4) { memcpy(shared_ls,c->ls,0x40000);c->ls=shared_ls; }
     if (options&8) be32(c->ls+0x204,0x00002001u);
     if (options&16) c->image_id=-1;
+    if (options&64) {
+        be32(c->ls+0x100,0x33000000u|(0xffc0u<<7));
+        be32(c->ls,0x40800003u|(value<<7));be32(c->ls+4,0x35000000u);
+    }
     return c;
 }
 static void execute(spu_context* c,const spu_native_leaf_plan* plan) {
@@ -91,9 +95,9 @@ static void execute(spu_context* c,const spu_native_leaf_plan* plan) {
 }
 static int prepare(const spu_context* c,uint64_t remaining,spu_native_leaf_plan* plan) {
     (void)remaining; /* runtime must also enforce a too-large returned plan */
-    if (!atomic_load(&enabled) || word(c->ls+0x200)!=(0x40800003u|(42u<<7)) ||
-        word(c->ls+0x204)!=0x35000000u) return 0;
-    plan->instructions=bad==2 ? 0 : 2;plan->last_pc=0x204;
+    if (!atomic_load(&enabled) || word(c->ls+c->pc)!=(0x40800003u|(42u<<7)) ||
+        word(c->ls+c->pc+4)!=0x35000000u) return 0;
+    plan->instructions=bad==2 ? 0 : 2;plan->last_pc=c->pc+4;
     plan->resume_pc=c->gpr[0]._u32[0]&0x3fffcu;plan->execute=execute;
     return 1;
 }
@@ -137,6 +141,7 @@ int main(int argc,char** argv) {
     require(spu_native_leaf_register(NULL)==-1,"invalid registration");
     require(spu_native_leaf_register(&leaf)==0,"registration");
     require(spu_native_leaf_register(&leaf)==-1,"duplicate registration");
+    spu_native_leaf zero={0,8,prepare};require(!spu_native_leaf_register(&zero),"zero entry registration");
     if (!strcmp(mode,"ambiguous")) {
         leaf.prepare=also_prepare;require(!spu_native_leaf_register(&leaf),"second guard");
     }
@@ -158,6 +163,7 @@ int main(int argc,char** argv) {
     g_spu_ls_watch_n=1;compare(42,0,0,0);g_spu_ls_watch_n=0;
     for(options=1;options<=8;options*=2) compare(42,0,0,0);
     options=16;compare(42,0,0,1);compare(43,0,0,0);
+    options=64;compare(42,0,0,1);compare(43,0,0,0);
     options=0;
     spu_context* c=program(42);c->int_enable=1;c->event_mask=c->event_status=2;
     int before=atomic_load(&calls);spu_interp_run(c,0x100);
