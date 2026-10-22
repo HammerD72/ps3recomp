@@ -44,7 +44,8 @@ for mode in ['normal','empty']:
 for mode,message in [('bad','continuation/status'),('plan','invalid plan'),('ambiguous','ambiguous guards')]:
     r=run(exe,mode)
     assert r.returncode==86 and '[spu-native-leaf] invalid execution: '+message in r.stderr,r.stdout+r.stderr
-for variable in ['SPU_LS_LOWREAD','SPU_SMC_WATCH','SPU_PCHIST','YDKJ_SPU_TRACE','YDKJ_CRI_GATE1TRACE','SPU_STEPCAP']:
+for variable in ['SPU_LS_LOWREAD','SPU_SMC_WATCH','SPU_PCHIST','SPU_TRACE_CALLS',
+                 'SPU_BOUNDARY_DIR','YDKJ_SPU_TRACE','YDKJ_CRI_GATE1TRACE','SPU_STEPCAP']:
     r=run(exe,'instrumented',{variable:'100'})
     assert r.returncode==0,r.stdout+r.stderr
 
