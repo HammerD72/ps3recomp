@@ -35,6 +35,11 @@ uint32_t spu_interp_run(spu_context* ctx, uint32_t start_lsa);
 /* As spu_interp_run, but also hands back at stop_lsa (0 = no such point): the
  * return point of the drain the caller goes back to (spu_smc_microstep). */
 uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa);
+/* Optional exact guest-instruction ceiling; zero is unbounded. On exhaustion,
+ * return the current PC with RUNNING status and this thread's executed count.
+ * A replacement that cannot fit wholly in the remainder stays interpreted. */
+uint32_t spu_interp_run_until_budget(spu_context* ctx, uint32_t start_lsa,
+                                    uint32_t stop_lsa, uint64_t budget);
 
 /* Reports belong to the host thread that ran the interpreter. In particular,
  * publishing each instruction's PC must not contend with other SPU workers.

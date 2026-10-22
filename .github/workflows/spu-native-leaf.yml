@@ -1,0 +1,24 @@
+name: Guarded native leaf dispatch
+on:
+  push:
+    branches: [master, main, combined, codex/spu-native-leaf-dispatch]
+    paths: ['runtime/spu/spu_interp.c', 'runtime/spu/spu_interp.h', 'runtime/spu/spu_native_leaf.h', 'runtime/spu/tests/spu_native_leaf_test.c', 'tools/test_spu_native_leaf.py', '.github/workflows/spu-native-leaf.yml']
+  pull_request:
+    paths: ['runtime/spu/spu_interp.c', 'runtime/spu/spu_interp.h', 'runtime/spu/spu_native_leaf.h', 'runtime/spu/tests/spu_native_leaf_test.c', 'tools/test_spu_native_leaf.py', '.github/workflows/spu-native-leaf.yml']
+  workflow_dispatch:
+jobs:
+  native-leaf:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - run: python tools/test_spu_native_leaf.py

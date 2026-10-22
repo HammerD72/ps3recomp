@@ -7,6 +7,8 @@
  */
 #include "spu_interp.h"
 #include "spu_helpers.h"
+#include "spu_native_leaf.h"
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -23,6 +25,92 @@ uint32_t spu_rchcnt(spu_context* ctx, uint32_t channel);
  * synchronous -- the sending PPU thread runs the SPU inline. */
 uint32_t g_spu_pending_evt[3];
 int      g_spu_pending_evt_valid;
+
+enum { NATIVE_LEAVES = 32 };
+static spu_native_leaf native_leaves[NATIVE_LEAVES];
+static unsigned native_count;
+static uint32_t native_entries[0x40000 / 128];
+static atomic_flag native_lock = ATOMIC_FLAG_INIT;
+static atomic_int native_frozen;
+static SPU_THREAD_LOCAL int native_busy;
+static void native_lock_enter(void) {
+    while (atomic_flag_test_and_set_explicit(&native_lock,memory_order_acquire)) {}
+}
+static void native_lock_leave(void) {
+    atomic_flag_clear_explicit(&native_lock,memory_order_release);
+}
+int spu_native_leaf_register(const spu_native_leaf* leaf) {
+    const char* error=NULL;
+    native_lock_enter();
+    if (atomic_load_explicit(&native_frozen,memory_order_relaxed)) error="registry frozen";
+    else if (!leaf || !leaf->prepare || (leaf->begin&3) || (leaf->end&3) ||
+             leaf->begin>=leaf->end || leaf->end>0x40000) error="invalid extent/callback";
+    else if (native_count==NATIVE_LEAVES) error="registry full";
+    else {
+        for (unsigned i=0;i<native_count;i++)
+            if (native_leaves[i].begin==leaf->begin && native_leaves[i].prepare==leaf->prepare)
+                error="duplicate entry/callback";
+        if (!error) {
+            native_leaves[native_count++]=*leaf;
+            native_entries[leaf->begin>>7] |= 1u<<((leaf->begin>>2)&31);
+        }
+    }
+    native_lock_leave();
+    if (error) fprintf(stderr,"[spu-native-leaf] registration rejected: %s\n",error);
+    return error ? -1 : 0;
+}
+static void native_freeze(void) {
+    if (atomic_load_explicit(&native_frozen,memory_order_acquire)) return;
+    native_lock_enter();
+    atomic_store_explicit(&native_frozen,1,memory_order_release);
+    native_lock_leave();
+}
+static void native_error(const char* reason) {
+    fprintf(stderr,"[spu-native-leaf] invalid execution: %s\n",reason); abort();
+}
+static int native_ready(const spu_context* ctx) {
+    return ctx->ls==ctx->ls_store && ctx->status==SPU_STATUS_RUNNING &&
+        !ctx->list_stall_mask &&
+        !(ctx->int_enable && (__atomic_load_n(&ctx->event_status,__ATOMIC_ACQUIRE)&ctx->event_mask));
+}
+static uint64_t native_try(spu_context* ctx,uint32_t stop,uint64_t remaining,
+                           uint32_t* last) {
+    if (native_busy || !native_ready(ctx)) return 0;
+    const uint32_t pc=ctx->pc;
+    const uint32_t interrupt_enable=ctx->int_enable, event_mask=ctx->event_mask;
+    const int depth=ctx->host_depth;
+    spu_native_leaf_plan chosen={0};
+    unsigned accepted=0;
+    native_busy=1;
+    for (unsigned i=0;i<native_count;i++) {
+        const spu_native_leaf* leaf=&native_leaves[i];
+        if (leaf->begin!=pc || (stop>=leaf->begin && stop<leaf->end)) continue;
+        spu_native_leaf_plan plan={0};
+        int result=leaf->prepare(ctx,remaining,&plan);
+        if (result<0 || result>1) native_error("prepare result");
+        if (ctx->pc!=pc) native_error("prepare changed entry PC");
+        if (!native_ready(ctx)) { native_busy=0; return 0; }
+        if (!result) continue;
+        if (!plan.execute || !plan.instructions || (plan.resume_pc&3) ||
+            plan.resume_pc>=0x40000 || (plan.resume_pc>=leaf->begin && plan.resume_pc<leaf->end) ||
+            (plan.last_pc&3) || plan.last_pc<leaf->begin || plan.last_pc>=leaf->end)
+            native_error("invalid plan");
+        if (plan.instructions>remaining) continue;
+        if (++accepted>1) native_error("ambiguous guards");
+        chosen=plan;
+    }
+    if (accepted && !native_ready(ctx)) accepted=0;
+    if (accepted) {
+        chosen.execute(ctx,&chosen);
+        if (ctx->pc!=chosen.resume_pc || ctx->status!=SPU_STATUS_RUNNING ||
+            ctx->ls!=ctx->ls_store || ctx->list_stall_mask || ctx->host_depth!=depth ||
+            ctx->int_enable!=interrupt_enable || ctx->event_mask!=event_mask)
+            native_error("continuation/status");
+        *last=chosen.last_pc;
+    }
+    native_busy=0;
+    return accepted ? chosen.instructions : 0;
+}
 
 /* ---- decode: 32-bit insn -> fields (mirrors spu_disasm.spu_decode order) ---- */
 typedef struct {
@@ -389,7 +477,8 @@ uint32_t spu_interp_run(spu_context* ctx, uint32_t start_lsa) {
     return spu_interp_run_until(ctx, start_lsa, 0);
 }
 
-static uint32_t spu_interp_run_until_scoped_body(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa) {
+static uint32_t spu_interp_run_until_scoped_body(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa, uint64_t budget) {
+    native_freeze();
     ctx->pc = start_lsa & 0x3FFFC;
     ctx->status = SPU_STATUS_RUNNING;
     uint64_t steps = 0;
@@ -406,6 +495,9 @@ static uint32_t spu_interp_run_until_scoped_body(spu_context* ctx, uint32_t star
     static int _g1in=0;
     uint32_t ring[64]; int rc=0, rn=0;
     for (;;) {
+        if (budget && steps>=budget) {
+            g_spu_interp_steps=steps; return ctx->pc;
+        }
         /* Match the lifted path: only synthetic HLE tasks may bypass the
          * resident policy. Real tasksets also store 0xA70 in their API table.
          * Preserve the legacy CRI return convention while invoking the HLE. */
@@ -426,7 +518,24 @@ static uint32_t spu_interp_run_until_scoped_body(spu_context* ctx, uint32_t star
          * un-lifted image (e.g. a title's raw SPU jobs) must never rejoin
          * another image's functions that happen to share an LS address. */
         /* ponytail: pc-only match; a recursive call through the same site would stop early -- compare r1 too if one shows up. */
-        if (ctx->image_id >= 0 && ((stop_lsa && ctx->pc == stop_lsa) || spu_lifted_lookup(ctx, ctx->pc))) { g_spu_interp_steps = steps; g_spu_interp_last_pc = ctx->pc; return ctx->pc; }  /* rejoin fast path */
+        if (ctx->image_id >= 0 && stop_lsa && ctx->pc == stop_lsa) {
+            g_spu_interp_steps=steps; g_spu_interp_last_pc=ctx->pc; return ctx->pc;
+        }
+        /* Cheap empty-registry path; guards run only at explicit entry PCs.
+         * Instrumented instruction streams always retain interpretation. */
+        if (native_count && ctx->pc<0x40000 && !(ctx->pc&3) &&
+            (native_entries[ctx->pc>>7] & (1u<<((ctx->pc>>2)&31))) &&
+            !_tr && !_cap && !_g1 && !g_spu_ls_watch_n &&
+            g_spu_ls_probe<=0 && g_spu_smc_watch<=0 &&
+            !getenv("SPU_LS_LOWREAD") && !getenv("SPU_LS_WATCH") &&
+            !getenv("SPU_SMC_WATCH") && !getenv("SPU_PCHIST")) {
+            uint32_t last=ctx->pc;
+            uint64_t used=native_try(ctx,stop_lsa,budget ? budget-steps : UINT64_MAX,&last);
+            if (used) { steps+=used; g_spu_interp_last_pc=last; continue; }
+        }
+        if (ctx->image_id >= 0 && spu_lifted_lookup(ctx, ctx->pc)) {
+            g_spu_interp_steps=steps; g_spu_interp_last_pc=ctx->pc; return ctx->pc;
+        }
         g_spu_interp_last_pc = ctx->pc;
         if (_g1>0) {
             int inr = (ctx->pc >= 0x26E80u && ctx->pc < 0x26F14u);
@@ -502,8 +611,11 @@ void spu_dispatch(spu_context* ctx, uint32_t target) {
 }
 
 uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa) {
+    return spu_interp_run_until_budget(ctx,start_lsa,stop_lsa,0);
+}
+uint32_t spu_interp_run_until_budget(spu_context* ctx,uint32_t start_lsa,uint32_t stop_lsa,uint64_t budget) {
     uint64_t saved=spu_sf_simd_enter();
-    uint32_t result=spu_interp_run_until_scoped_body(ctx,start_lsa,stop_lsa);
+    uint32_t result=spu_interp_run_until_scoped_body(ctx,start_lsa,stop_lsa,budget);
     spu_sf_simd_leave(saved);
     return result;
 }
