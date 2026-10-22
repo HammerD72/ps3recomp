@@ -84,7 +84,7 @@ static uint64_t native_try(spu_context* ctx,uint32_t stop,uint64_t remaining,
     native_busy=1;
     for (unsigned i=0;i<native_count;i++) {
         const spu_native_leaf* leaf=&native_leaves[i];
-        if (leaf->begin!=pc || (stop>=leaf->begin && stop<leaf->end)) continue;
+        if (leaf->begin!=pc || (stop && stop>=leaf->begin && stop<leaf->end)) continue;
         spu_native_leaf_plan plan={0};
         int result=leaf->prepare(ctx,remaining,&plan);
         if (result<0 || result>1) native_error("prepare result");
@@ -528,7 +528,8 @@ static uint32_t spu_interp_run_until_scoped_body(spu_context* ctx, uint32_t star
             !_tr && !_cap && !_g1 && !g_spu_ls_watch_n &&
             g_spu_ls_probe<=0 && g_spu_smc_watch<=0 &&
             !getenv("SPU_LS_LOWREAD") && !getenv("SPU_LS_WATCH") &&
-            !getenv("SPU_SMC_WATCH") && !getenv("SPU_PCHIST")) {
+            !getenv("SPU_SMC_WATCH") && !getenv("SPU_PCHIST") &&
+            !getenv("SPU_TRACE_CALLS") && !getenv("SPU_BOUNDARY_DIR")) {
             uint32_t last=ctx->pc;
             uint64_t used=native_try(ctx,stop_lsa,(budget ? budget : UINT64_MAX)-steps,&last);
             if (used) { steps+=used; g_spu_interp_last_pc=last; continue; }
