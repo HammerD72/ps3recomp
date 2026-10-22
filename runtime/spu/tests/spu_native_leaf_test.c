@@ -6,7 +6,33 @@
 #include <string.h>
 #include <stdatomic.h>
 #include <signal.h>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <xmmintrin.h>
+typedef unsigned HostFP;
+static HostFP get_fp(void) { return _mm_getcsr(); }
+static void set_fp(HostFP s) { _mm_setcsr(s); }
+static void mode_fp(HostFP s,unsigned mode) { set_fp((s&~0x6000u)|(mode<<13)|0x20u); }
+static int same_fp(HostFP a,HostFP b) { return a==b; }
+#elif defined(__aarch64__)
+typedef struct { uint64_t control,status; } HostFP;
+static HostFP get_fp(void) {
+    HostFP s;
+    __asm__ volatile("mrs %0, fpcr" : "=r"(s.control));
+    __asm__ volatile("mrs %0, fpsr" : "=r"(s.status));
+    return s;
+}
+static void set_fp(HostFP s) {
+    __asm__ volatile("msr fpcr, %0" : : "r"(s.control) : "memory");
+    __asm__ volatile("msr fpsr, %0" : : "r"(s.status) : "memory");
+}
+static void mode_fp(HostFP s,unsigned mode) {
+    s.control=(s.control&~(3ull<<22))|((uint64_t)mode<<22);
+    s.status|=1u<<4;set_fp(s);
+}
+static int same_fp(HostFP a,HostFP b) { return a.control==b.control && a.status==b.status; }
+#else
+#error Host FP verification needs x86 or AArch64
+#endif
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -77,7 +103,7 @@ static int also_prepare(const spu_context* c,uint64_t r,spu_native_leaf_plan* p)
 }
 static void compare(unsigned value,uint32_t stop,uint64_t budget,int expected_calls) {
     spu_context* ref=program(value),*actual=program(value);
-    unsigned csr=_mm_getcsr();
+    HostFP csr=get_fp();
     atomic_store(&enabled,0);
     uint32_t result=spu_interp_run_until_budget(ref,0x100,stop,budget);
     uint64_t steps=g_spu_interp_steps;uint32_t last=g_spu_interp_last_pc;
@@ -87,7 +113,7 @@ static void compare(unsigned value,uint32_t stop,uint64_t budget,int expected_ca
     require(got==result && g_spu_interp_steps==steps && g_spu_interp_last_pc==last,"stop/budget/count/last-PC parity");
     actual->ls=ref->ls;
     require(!memcmp(actual,ref,sizeof(*ref)),"complete context/memory parity");
-    require(_mm_getcsr()==csr,"caller FP state");free(ref);free(actual);
+    require(same_fp(get_fp(),csr),"caller FP state");free(ref);free(actual);
 }
 #ifdef _WIN32
 static DWORD WINAPI worker(void* unused) {
@@ -122,11 +148,11 @@ int main(int argc,char** argv) {
     }
     if (!strcmp(mode,"instrumented")) { compare(42,0,0,0); puts("PASS instrumented stream retained");return 0; }
     for(unsigned rounding=0;rounding<4;rounding++) {
-        unsigned saved=_mm_getcsr();_mm_setcsr((saved&~0x6000u)|(rounding<<13)|0x20u);
+        HostFP saved=get_fp();mode_fp(saved,rounding);
         compare(42,0,0,1);compare(43,0,0,0);
         compare(42,0x200,0,0);compare(42,0x204,0,0);compare(42,0x104,0,1);
         for(unsigned limit=1;limit<=5;limit++) compare(42,0,limit,limit>=3 ? 1 : 0);
-        _mm_setcsr(saved);
+        set_fp(saved);
     }
     nested=1;compare(42,0,0,1);nested=0;
     g_spu_ls_watch_n=1;compare(42,0,0,0);g_spu_ls_watch_n=0;
