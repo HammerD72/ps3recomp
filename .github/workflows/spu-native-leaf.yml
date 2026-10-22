@@ -1,7 +1,7 @@
 name: Guarded native leaf dispatch
 on:
   push:
-    branches: [master, main, combined, codex/spu-native-leaf-dispatch]
+    branches: [master, main, combined, codex/spu-native-leaf-dispatch, codex/spu-leaf-startup-options]
     paths: ['runtime/spu/spu_interp.c', 'runtime/spu/spu_interp.h', 'runtime/spu/spu_native_leaf.h', 'runtime/spu/tests/spu_native_leaf_test.c', 'tools/test_spu_native_leaf.py', '.github/workflows/spu-native-leaf.yml']
   pull_request:
     paths: ['runtime/spu/spu_interp.c', 'runtime/spu/spu_interp.h', 'runtime/spu/spu_native_leaf.h', 'runtime/spu/tests/spu_native_leaf_test.c', 'tools/test_spu_native_leaf.py', '.github/workflows/spu-native-leaf.yml']
