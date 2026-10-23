@@ -1,0 +1,32 @@
+name: Native prepared vertex fetch
+on:
+  push:
+    branches: [master, main, combined, 'codex/**']
+    paths: ['libs/video/rsx_vertex_fetch.h', 'libs/video/rsx_vertex_fetch.c', 'libs/video/rsx_commands.h', 'libs/video/tests/test_vertex_prepared.c', 'tools/test_vertex_prepared.py', '.github/workflows/vertex-prepared.yml']
+  pull_request:
+    paths: ['libs/video/rsx_vertex_fetch.h', 'libs/video/rsx_vertex_fetch.c', 'libs/video/rsx_commands.h', 'libs/video/tests/test_vertex_prepared.c', 'tools/test_vertex_prepared.py', '.github/workflows/vertex-prepared.yml']
+  workflow_dispatch:
+jobs:
+  vertex:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - run: python tools/test_vertex_prepared.py --mutants
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vertex-prepared-${{ matrix.os }}
+          path: |
+            build/vertex-prepared-tests/**/*.log
+            build/vertex-prepared-tests/**/*.json
+          retention-days: 5
