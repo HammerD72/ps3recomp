@@ -1,0 +1,47 @@
+name: SPU execution observations
+on:
+  push:
+    branches: [master, main, combined, 'codex/**']
+    paths:
+      - 'runtime/spu/**'
+      - 'runtime/diag/spu_execution_observer.c'
+      - 'include/ps3emu/spu_execution_observer.h'
+      - 'tests/spu_execution_observer.c'
+      - 'tools/test_spu_execution_observer.py'
+      - 'CMakeLists.txt'
+      - '.github/workflows/spu-execution-observers.yml'
+  pull_request:
+    paths:
+      - 'runtime/spu/**'
+      - 'runtime/diag/spu_execution_observer.c'
+      - 'include/ps3emu/spu_execution_observer.h'
+      - 'tests/spu_execution_observer.c'
+      - 'tools/test_spu_execution_observer.py'
+      - 'CMakeLists.txt'
+      - '.github/workflows/spu-execution-observers.yml'
+  workflow_dispatch:
+jobs:
+  execution:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - run: python tools/test_spu_execution_observer.py --mutants --syntax
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: execution-${{ matrix.os }}
+          path: |
+            build/spu-execution-observer-tests/**/*.log
+            build/spu-execution-observer-tests/**/*.json
+          retention-days: 5

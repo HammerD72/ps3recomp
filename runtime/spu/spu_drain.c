@@ -416,6 +416,7 @@ static void spu_drain_call_scoped_body(spu_context* ctx, uint32_t return_pc)
             }
             void (*fn)(spu_context*) = g_spu_trampoline_fn;
             g_spu_trampoline_fn = 0;
+            PS3_SPU_DISPATCH_BASE(fn);
             ctx->drain_ret_pc = return_pc & SPU_LS_MASK;   /* re-set: a nested drain changed it */
             yz_lockstep_tick(ctx);
             spu_task_launch_check(ctx, (void*)fn);
@@ -431,6 +432,7 @@ static void spu_drain_call_scoped_body(spu_context* ctx, uint32_t return_pc)
                         ctx->irq_frame = &f;
                     }
                     if (setjmp(f.env) == 0) {
+                        PS3_SPU_DISPATCH(ctx, vf);
                         vf(ctx);
                     } else {
                         /* iret fired deeper: registers restored, pc = srr0 */
@@ -442,6 +444,7 @@ static void spu_drain_call_scoped_body(spu_context* ctx, uint32_t return_pc)
                     continue;
                 }
             }
+            PS3_SPU_DISPATCH(ctx, fn);
             fn(ctx);
         }
         if ((ctx->pc & SPU_LS_MASK) == (return_pc & SPU_LS_MASK)) {

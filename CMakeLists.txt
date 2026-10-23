@@ -21,6 +21,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ---------------------------------------------------------------------------
 option(PS3RECOMP_BUILD_TESTS "Build unit tests" OFF)
 option(PS3RECOMP_ATOMIC_OBSERVATION "Compile opt-in atomic commit probes" OFF)
+option(PS3RECOMP_EXECUTION_OBSERVATION "Compile opt-in SPU execution observations" OFF)
 
 # ---------------------------------------------------------------------------
 # Collect source files
@@ -108,7 +109,8 @@ add_library(ps3recomp_runtime STATIC
     ${RUNTIME_SOURCES}
 )
 target_compile_definitions(ps3recomp_runtime PUBLIC
-    PS3_ATOMIC_OBSERVATION=$<BOOL:${PS3RECOMP_ATOMIC_OBSERVATION}>)
+    PS3_ATOMIC_OBSERVATION=$<BOOL:${PS3RECOMP_ATOMIC_OBSERVATION}>
+    PS3_EXECUTION_OBSERVATION=$<BOOL:${PS3RECOMP_EXECUTION_OBSERVATION}>)
 
 target_include_directories(ps3recomp_runtime PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
