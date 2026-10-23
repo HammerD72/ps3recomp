@@ -1,0 +1,48 @@
+name: Native atomic commit observations
+on:
+  push:
+    branches: [master, main, combined, 'codex/**']
+    paths:
+      - include/ps3emu/native_atomic_observer.h
+      - runtime/ppu/ppu_loader.cpp
+      - runtime/spu/spu_channels.c
+      - tests/native_atomic_observer_*
+      - tools/test_native_atomic_observer.py
+      - .github/workflows/native-atomic-observers.yml
+      - CMakeLists.txt
+  pull_request:
+    paths:
+      - include/ps3emu/native_atomic_observer.h
+      - runtime/ppu/ppu_loader.cpp
+      - runtime/spu/spu_channels.c
+      - tests/native_atomic_observer_*
+      - tools/test_native_atomic_observer.py
+      - .github/workflows/native-atomic-observers.yml
+      - CMakeLists.txt
+  workflow_dispatch:
+jobs:
+  atomic-observers:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - name: Actual atomic paths, full SPU syntax and specific negative controls
+        run: python tools/test_native_atomic_observer.py --mutants --syntax
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-atomic-observers-${{ matrix.os }}
+          path: |
+            build/native-atomic-observer-tests/**/*.log
+            build/native-atomic-observer-tests/**/*.json
+          retention-days: 5
