@@ -160,6 +160,20 @@ static void eligible_policy(spu_context* c)
 {
     atomic_store(&eligible_lane,spu_ls_read32(c,0x1C8)+1);finish(c);
 }
+static atomic_uint requested_before,requested_after;
+static void requested_lanes_policy(spu_context* c)
+{
+    u32 ea=spu_ls_read32(c,0x1C4),wid=spu_ls_read32(c,0x1DC);
+    /* Ready count is requested demand. The policy's actual claim changes it;
+     * choosing a host worker must not pre-consume that same request. */
+    spu_lockline_lock();
+    unsigned requested=vm_read8(ea+SPURS_WKL_READY1+wid);
+    atomic_store(&requested_before,requested);
+    vm_base[ea+SPURS_WKL_READY1+wid]=(u8)(requested?requested-1:0);
+    ef_line_end(ea);
+    atomic_store(&requested_after,vm_read8(ea+SPURS_WKL_READY1+wid));
+    finish(c);
+}
 static void register_pm(unsigned ea,unsigned byte,spu_lifted_entry_fn fn,int image)
 {
     memset(vm_base+ea,byte,16);
@@ -285,5 +299,23 @@ int main(void)
     run_pair(error_direct);assert(direct_rc[0]==-2 && direct_rc[1]==0);
     spurs_policy_release_instance(0x11000);spurs_policy_release_instance(0x12000);
     puts("SPURS same workload/lane across instances retains separate LS and TLS exit classification PASS");
+    register_pm(0x9800,0x88,requested_lanes_policy,85);
+    assert(cellSpursInitialize((CellSpurs*)0x1000,1,0,0,0)==0);
+    memset(vm_base+0x8020,0,8);
+    assert(cellSpursAddWorkload((CellSpurs*)0x1000,(u32*)0x8000,(void*)0x9800,16,0,(u8*)0x8020,1,1)==0);
+    assert(cellSpursReadyCountStore((CellSpurs*)0x1000,0,5)==0);
+    vm_base[0x8020]=1;
+    assert(cellSpursSetPriorities((CellSpurs*)0x1000,0,(u8*)0x8020)==0);
+    wait_for(&requested_after,1,"policy-owned demand");
+    assert(atomic_load(&requested_before)==5 && "scheduler consumed policy-owned requested lanes");
+    assert(atomic_load(&requested_after)==4);
+    finalize(0x1000);
+    puts("SPURS admission preserves requested lanes until actual policy claim PASS");
+
+    g_spurs_pm_polls=7;g_spurs_pm_exited=1;g_wws_batch_gets=9;
+    assert(spu_run_policy_module(NULL,0,vm_base+0x9800,16,0,0,0x1000,0)==-1);
+    assert(!g_spurs_pm_polls && !g_spurs_pm_exited && !g_wws_batch_gets &&
+           "rejected policy retained preceding worker productivity");
+    puts("SPURS rejected policy clears runner-local counters before admission PASS");
     free(vm_base);return 0;
 }

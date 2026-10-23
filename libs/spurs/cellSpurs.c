@@ -12,7 +12,8 @@
 #include "cellSpurs.h"
 #include "../../runtime/platform/win32_compat.h"
 #include "../../runtime/ps3_log.h"
-#include "spu_workload.h"   /* SPU image -> lifted-entry dispatch (runtime/spu) */
+#include "spu_workload.h"
+#include "thread_name.h"   /* SPU image -> lifted-entry dispatch (runtime/spu) */
 #include "spurs_taskset.h"  /* REAL BE CellSpursTaskset layout builders (fork Option-B) */
 #include "../../runtime/ppu/ppu_memory.h"   /* vm_base (guest mem) */
 #include <stdio.h>
@@ -1677,6 +1678,9 @@ static DWORD WINAPI spurs_pm_worker(LPVOID p)
 {
     struct SpursPmSlot* slot = (struct SpursPmSlot*)p;
     struct SpursInst* si = slot->instance;
+    char worker_name[32];
+    snprintf(worker_name,sizeof(worker_name),"spurs_pm:%08X:%u",si->ea,slot->spu_num);
+    ps3_thread_setname((uintptr_t)-2,worker_name);
 #ifdef _WIN32
     { ULONG g = 256 * 1024; SetThreadStackGuarantee(&g); }
 #endif
@@ -1707,10 +1711,17 @@ static DWORD WINAPI spurs_pm_worker(LPVOID p)
 static DWORD WINAPI spurs_kernel_thread(LPVOID p)
 {
     struct SpursInst* si = (struct SpursInst*)p;
+    ps3_thread_setname((uintptr_t)-2,"spurs_kernel");
     int disabled = getenv("PS3_NO_SPURS_PM") != NULL;
     AcquireSRWLockExclusive(&si->lock);
     while (!si->stopping) {
-        SleepConditionVariableSRW(&si->wake, &si->lock, 1, 0);
+        /* Preserve the periodic poller's native Sleep(1) cadence during this
+         * admission change. Completion wakes workers, not a faster publication
+         * probe. Explicit producer publication/notification is separate work.
+         * Neither sleeping nor guest execution may hold the instance lock. */
+        ReleaseSRWLockExclusive(&si->lock);
+        Sleep(1);
+        AcquireSRWLockExclusive(&si->lock);
         if (si->stopping) break;
         if (disabled) continue;
         u32 ea = si->ea;
@@ -1742,7 +1753,9 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
                 spu_lockline_lock();
                 ready = vm_read8(ea + SPURS_WKL_READY1 + wid);
                 signal = vm_read16(ea + SPURS_WKL_SIGNAL1);
-                if (ready) vm_base[ea + SPURS_WKL_READY1 + wid] = (u8)(ready - 1);
+                /* Requested lanes are policy-owned demand, not a per-host-
+                 * dispatch token. Native admission only publishes contention;
+                 * consuming ready here would double-consume a policy claim. */
                 if (signal & (0x8000u >> wid))
                     ef_w16(ea + SPURS_WKL_SIGNAL1, (u16)(signal & ~(0x8000u >> wid)));
                 ef_line_end(ea);

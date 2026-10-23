@@ -156,6 +156,10 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
                           uint64_t wkl_data, uint32_t wid, uint32_t spurs_ea,
                           uint32_t spu_num)
 {
+    g_spurs_pm_polls = 0;
+    g_spurs_pm_exited = 0;
+    g_wws_batch_gets = 0;
+
     if (!entry || !pm_host || !pm_size || pm_size > SPU_LS_SIZE - 0xA00)
         return -1;
 
@@ -287,8 +291,6 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
     ctx->gpr[4]._u32[3] = 0;
     ctx->gpr[5]._u32[0] = 0;                           /* poll status */
 
-    g_spurs_pm_polls  = 0;
-    g_spurs_pm_exited = 0;
 
     /* RUN/END tracing: thousands of policy dispatches per second made these
      * unconditional fprintf+fflush pairs a real fraction of movie playback.
@@ -655,7 +657,7 @@ int spurs_run_taskset_policy_probe(uint32_t taskset_ea, uint32_t taskid,
     ctx->gpr[4]._u32[1] = (uint32_t)wkl_data;
     ctx->gpr[5]._u32[0] = 0;
 
-    g_spurs_pm_polls = 0; g_spurs_pm_exited = 0;
+    g_spurs_pm_polls = 0; g_spurs_pm_exited = 0; g_wws_batch_gets = 0;
 
     fprintf(stderr, "[real-pm] RUN taskset=0x%08X task=%u spurs=0x%08X wkl=0x%llX wid=%u\n",
             taskset_ea, taskid, spurs_ea, (unsigned long long)wkl_data, wid);
