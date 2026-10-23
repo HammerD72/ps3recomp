@@ -24,14 +24,15 @@ exe = out / ('fixture.exe' if os.name == 'nt' else 'fixture')
 command = [args.compiler, str(root/'tests/test_spurs_scheduler.c'),
            *[str(root/'runtime/spu'/f'{unit}.c') for unit in units],
            str(root/'runtime/platform/win32_compat.c'),
-           str(root/'runtime/memory/guest_read_sync.c')]
+           str(root/'runtime/memory/guest_read_sync.c'),
+           str(root/'runtime/platform/thread_name.c')]
 includes = [root/'include', root/'runtime/spu', root/'runtime/platform']
 if os.name == 'nt':
     command += ['/nologo','/std:c17','/O2','/UNDEBUG','/Gy','/Gw',
                 *['/I'+str(path) for path in includes], '/Fo'+str(out)+os.sep,
                 '/Fe'+str(exe), '/link','/OPT:REF']
 else:
-    command += ['-std=gnu17','-O1','-UNDEBUG','-ffunction-sections','-fdata-sections',
+    command += ['-std=gnu17','-D_GNU_SOURCE','-O1','-UNDEBUG','-ffunction-sections','-fdata-sections',
                 '-Wl,-dead_strip' if platform.system()=='Darwin' else '-Wl,--gc-sections',
                 *['-I'+str(path) for path in includes], '-pthread','-lm','-o',str(exe)]
 env = {key:value for key,value in os.environ.items()
@@ -49,31 +50,52 @@ assert 'SPURS same workload/lane across instances retains separate LS and TLS ex
 print('PASS actual scheduler on '+platform.system()+'; no title inputs or skipped execution')
 
 if args.mutants:
-    # Compile the actual scheduler with admission restricted to one physical
-    # slot. The manufactured consumer must block the still-runnable producer.
-    mutant = out/'serialized-admission'
-    (mutant/'tests').mkdir(parents=True, exist_ok=True)
-    (mutant/'libs/spurs').mkdir(parents=True, exist_ok=True)
-    shutil.copy2(root/'tests/test_spurs_scheduler.c', mutant/'tests/test_spurs_scheduler.c')
-    source = (root/'libs/spurs/cellSpurs.c').read_text()
-    start = source.index('static DWORD WINAPI spurs_kernel_thread(LPVOID p)\n{')
-    before = 'for (u32 sn = 0; sn < si->nspus; sn++)'
-    assert before in source[start:]
-    source = source[:start]+source[start:].replace(before,'for (u32 sn = 0; sn < 1; sn++)',1)
-    (mutant/'libs/spurs/cellSpurs.c').write_text(source)
-    mutant_exe = mutant/('fixture.exe' if os.name=='nt' else 'fixture')
-    mutant_command = [str(mutant/'tests/test_spurs_scheduler.c') if arg==str(root/'tests/test_spurs_scheduler.c') else
-                      (('/Fe' if os.name=='nt' else '')+str(mutant_exe)) if arg==('/Fe'+str(exe) if os.name=='nt' else str(exe)) else
-                      ('/Fo'+str(mutant)+os.sep) if arg=='/Fo'+str(out)+os.sep else arg for arg in command]
-    # Copied source keeps original relative includes through these search roots.
-    extra = [('/I' if os.name=='nt' else '-I')+str(root/path) for path in ('tests','libs/spurs')]
-    position = mutant_command.index('/link') if os.name=='nt' else len(mutant_command)
-    mutant_command[position:position] = extra
-    (mutant/'command.json').write_text(json.dumps(mutant_command,indent=2))
-    built = subprocess.run(mutant_command,env=env,cwd=mutant,capture_output=True,text=True)
-    (mutant/'build.log').write_text(built.stdout+built.stderr)
-    assert built.returncode==0, 'Mutant must compile; compilation failure is not rejection: '+built.stderr
-    ran = subprocess.run([str(mutant_exe)],env=env,cwd=mutant,capture_output=True,text=True,timeout=15)
-    (mutant/'run.log').write_text(ran.stdout+ran.stderr)
-    assert ran.returncode!=0 and 'runnable producer could not run' in ran.stderr, 'Serialized admission escaped or failed for another reason'
-    print('PASS serialized-admission mutant compiled and failed the real producer-progress assertion')
+    for name,failure in [
+        ('serialized-admission','runnable producer could not run'),
+        ('consumed-ready-demand','scheduler consumed policy-owned requested lanes'),
+        ('stale-rejected-policy','rejected policy retained preceding worker productivity')]:
+        mutant=out/name
+        (mutant/'tests').mkdir(parents=True,exist_ok=True)
+        (mutant/'libs/spurs').mkdir(parents=True,exist_ok=True)
+        (mutant/'runtime/spu').mkdir(parents=True,exist_ok=True)
+        shutil.copy2(root/'tests/test_spurs_scheduler.c',mutant/'tests/test_spurs_scheduler.c')
+        source=(root/'libs/spurs/cellSpurs.c').read_text()
+        policy=(root/'runtime/spu/spurs_policy.c').read_text()
+        if name=='serialized-admission':
+            start=source.index('static DWORD WINAPI spurs_kernel_thread(LPVOID p)\n{')
+            before='for (u32 sn = 0; sn < si->nspus; sn++)'
+            assert before in source[start:]
+            source=source[:start]+source[start:].replace(before,'for (u32 sn = 0; sn < 1; sn++)',1)
+        elif name=='consumed-ready-demand':
+            before='                /* Requested lanes are policy-owned demand'
+            assert source.count(before)==1
+            source=source.replace(before,'                if (ready) vm_base[ea + SPURS_WKL_READY1 + wid] = (u8)(ready - 1);\n'+before)
+        else:
+            before='    g_spurs_pm_polls = 0;\n    g_spurs_pm_exited = 0;\n    g_wws_batch_gets = 0;\n'
+            assert policy.count(before)==1
+            policy=policy.replace(before,'')
+            admission='    if (wid >= SPURS_PM_MAX_WKL || spu_num >= 6) return -1;'
+            assert policy.count(admission)==1
+            policy=policy.replace(admission,before+admission)
+        (mutant/'libs/spurs/cellSpurs.c').write_text(source)
+        (mutant/'runtime/spu/spurs_policy.c').write_text(policy)
+        mutant_exe=mutant/('fixture.exe' if os.name=='nt' else 'fixture')
+        replacements={str(root/'tests/test_spurs_scheduler.c'):str(mutant/'tests/test_spurs_scheduler.c'),
+                      str(root/'runtime/spu/spurs_policy.c'):str(mutant/'runtime/spu/spurs_policy.c'),
+                      '/Fe'+str(exe):'/Fe'+str(mutant_exe),str(exe):str(mutant_exe),
+                      '/Fo'+str(out)+os.sep:'/Fo'+str(mutant)+os.sep}
+        mutant_command=[replacements.get(arg,arg) for arg in command]
+        extra=[('/I' if os.name=='nt' else '-I')+str(root/path) for path in ('tests','libs/spurs')]
+        position=mutant_command.index('/link') if os.name=='nt' else len(mutant_command)
+        mutant_command[position:position]=extra
+        (mutant/'command.json').write_text(json.dumps(mutant_command,indent=2))
+        built=subprocess.run(mutant_command,env=env,cwd=mutant,capture_output=True,text=True)
+        (mutant/'build.log').write_text(built.stdout+built.stderr)
+        assert built.returncode==0, 'Mutant must compile: '+str(mutant/'build.log')
+        ran=subprocess.run([str(mutant_exe)],env=env,cwd=mutant,capture_output=True,text=True,timeout=15)
+        (mutant/'run.log').write_text(ran.stdout+ran.stderr)
+        assert ran.returncode!=0 and failure in ran.stderr, 'Mutant escaped or failed for another reason: '+name
+        if name=='serialized-admission':
+            print('PASS serialized-admission mutant compiled and failed the real producer-progress assertion')
+        else:
+            print('PASS '+name+' mutant compiled and failed its intended behavioral assertion')
