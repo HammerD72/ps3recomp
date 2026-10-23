@@ -1,0 +1,55 @@
+name: SPURS scheduler
+on:
+  push:
+    paths:
+      - 'libs/spurs/**'
+      - 'runtime/spu/**'
+      - 'runtime/platform/**'
+      - 'runtime/memory/**'
+      - 'include/**'
+      - 'tests/test_spurs_scheduler.c'
+      - 'tools/test_spurs_scheduler.py'
+      - '.github/workflows/spurs-scheduler.yml'
+  pull_request:
+    paths:
+      - 'libs/spurs/**'
+      - 'runtime/spu/**'
+      - 'runtime/platform/**'
+      - 'runtime/memory/**'
+      - 'include/**'
+      - 'tests/test_spurs_scheduler.c'
+      - 'tools/test_spurs_scheduler.py'
+      - '.github/workflows/spurs-scheduler.yml'
+  workflow_dispatch:
+jobs:
+  scheduler:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - run: python tools/test_spurs_scheduler.py --mutants
+      - name: Require actual scheduler execution
+        shell: python
+        run: |
+          from pathlib import Path
+          text = Path('build/spurs-scheduler-tests/run.log').read_text()
+          assert 'SPURS runnable producer / blocked consumer / BUSY immutability / join PASS' in text
+          assert 'SPURS same workload/lane across instances retains separate LS and TLS exit classification PASS' in text
+          negative = Path('build/spurs-scheduler-tests/serialized-admission/run.log').read_text()
+          assert 'runnable producer could not run' in negative
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scheduler-${{ matrix.os }}
+          path: |
+            build/spurs-scheduler-tests/**/*.log
+            build/spurs-scheduler-tests/**/*.json
+          retention-days: 5
