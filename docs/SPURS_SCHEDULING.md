@@ -49,7 +49,9 @@ returns. A blocked workload still requires an available physical slot for its
 producer. Instances with all configured SPUs occupied cannot gain capacity by
 creating additional workers.
 
-Run `python3 tools/test_spurs_scheduler.py` on a POSIX host. The fixture links
+Run `python tools/test_spurs_scheduler.py --mutants` on Windows, Linux or
+macOS. Windows requires clang-cl with the Visual Studio developer environment;
+`--compiler` or `CC` selects an explicit compiler. The fixture links
 the real SDK scheduler, policy runner, halt/unwind path, channels, and coherency
 implementation with manufactured policy modules. It checks producer/consumer
 progress, contention and worker caps, stable physical slots, fair admission,
@@ -58,3 +60,18 @@ joined reinitialization, queue ownership, independent instances, resident local
 store isolation with identical workload/lane IDs, and concurrent kernel-exit
 versus stop classification. It contains no title assets. The prior synchronous
 scheduler fails the producer/consumer regression.
+
+The fixture uses owned, joined Win32 thread handles (the compatibility layer
+provides those on POSIX). Wait deadlines use elapsed milliseconds rather than
+assuming that Sleep(1) returns in one millisecond. Unrelated taskset and
+job-chain entry points required by COFF linking abort visibly if reached; they
+cannot fabricate a task or event result. Assertions and real policy execution
+remain enabled. Logs and exact commands live in build/spurs-scheduler-tests.
+
+The serialized-admission mutant compiles a copy of the actual coordinator
+restricted to one physical slot. It must fail the real blocked-consumer/
+runnable-producer progress assertion; a build failure or unrelated crash does
+not count. The Windows/Linux/macOS CI matrix independently requires real
+fixture and negative-test log markers, so the previous successful Windows
+`SKIP: POSIX fixture` path cannot satisfy it. These manufactured-module tests
+establish scheduler behavior, not native game compatibility or a speedup.

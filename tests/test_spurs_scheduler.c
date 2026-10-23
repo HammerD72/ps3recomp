@@ -20,6 +20,25 @@ void ps3_ww_report_inline(uint32_t a,uint64_t v,int w){(void)a;(void)v;(void)w;}
 static atomic_uint canceled_queues;
 void sys_event_queue_cancel_by_id(u32 id) { assert(id==3 || id==4);atomic_fetch_or(&canceled_queues,1u<<id); }
 void sys_event_queue_uncancel_by_id(u32 id) {(void)id;}
+/* COFF linkers resolve references in unrelated HLE entry points before dead
+ * stripping. Those APIs are outside this policy-scheduler fixture: trap if
+ * reached, rather than fabricating task or event completion. */
+static void unexpected_api(const char* name)
+{
+    fprintf(stderr,"FAIL: unexpected out-of-scope API: %s\n",name);abort();
+}
+void spurs_taskset_init(uint32_t ea,uint32_t spurs,uint64_t args,uint32_t wid,
+                       uint32_t size,uint32_t evf1,uint32_t evf2)
+{ unexpected_api("taskset init"); }
+void spurs_taskset_add_task(uint32_t ea,uint32_t id,uint64_t elf,uint64_t context,
+                           const uint32_t args[4],const uint32_t pattern[4])
+{ unexpected_api("taskset add task"); }
+int sys_event_queue_push_by_id(uint32_t id,uint64_t source,uint64_t a,uint64_t b,uint64_t c)
+{ unexpected_api("job-chain event push");abort(); }
+uint64_t spurs_pm_build_context(uint8_t* ls,uint32_t ea,uint32_t id,uint32_t a,uint32_t b)
+{ unexpected_api("taskset context build");abort(); }
+void ydkj_wake_all_event_flags(void)
+{ unexpected_api("unrelated event-flag wake"); }
 /* Observe the legacy bypass without substituting any policy completion. */
 static atomic_uint unbounded_dispatches;
 int fixture_unbounded_dispatch(const uint8_t* pm,uint32_t size,uint32_t data)
@@ -49,16 +68,18 @@ static void producer(spu_context* c)
 }
 static void wait_for(atomic_uint* p,unsigned value,const char* what)
 {
-    for(unsigned i=0;i<3000;i++) { if(atomic_load(p)>=value)return;Sleep(1); }
+    const unsigned long long deadline=ps3_ms_now()+3000;
+    do { if(atomic_load(p)>=value)return;Sleep(1); } while(ps3_ms_now()<deadline);
     fprintf(stderr,"FAIL: %s: runnable producer could not run while consumer waited\n",what);exit(1);
 }
 static void finalize(u32 ea)
 {
-    for(unsigned i=0;i<3000;i++) {
+    const unsigned long long deadline=ps3_ms_now()+3000;
+    do {
         s32 rc=cellSpursFinalize((CellSpurs*)(uintptr_t)ea);
         if (!rc) return;
         assert((u32)rc==CELL_SPURS_CORE_ERROR_BUSY);Sleep(1);
-    }
+    } while(ps3_ms_now()<deadline);
     assert(!"finalize failed to join after real policy return");
 }
 static atomic_uint held[16],done[16],gate,active_count,peak_count,lane_mask;
@@ -104,17 +125,29 @@ static void error_policy(spu_context* c)
     while(!atomic_load(&direct_exit)) Sleep(1);
     Sleep(10);spu_halt(c);
 }
-static void* direct(void* arg)
+static DWORD WINAPI direct(LPVOID arg)
 {
     unsigned id=(unsigned)(uintptr_t)arg;
     direct_rc[id]=spu_run_policy_module(resident_policy,79,vm_base+0x9400,16,id+1,3,0x11000+id*0x1000,0);
-    return NULL;
+    return 0;
 }
-static void* error_direct(void* arg)
+static DWORD WINAPI error_direct(LPVOID arg)
 {
     unsigned id=(unsigned)(uintptr_t)arg;
     direct_rc[id]=spu_run_policy_module(id?exit_policy:error_policy,79,vm_base+0x9400,16,id+1,3,0x11000+id*0x1000,0);
-    return NULL;
+    return 0;
+}
+static void run_pair(LPTHREAD_START_ROUTINE entry)
+{
+    HANDLE threads[2];
+    for(unsigned i=0;i<2;i++) {
+        threads[i]=CreateThread(NULL,0,entry,(LPVOID)(uintptr_t)i,0,NULL);
+        assert(threads[i]);
+    }
+    for(unsigned i=0;i<2;i++) {
+        assert(WaitForSingleObject(threads[i],INFINITE)==WAIT_OBJECT_0);
+        assert(CloseHandle(threads[i]));
+    }
 }
 static atomic_uint incarnation_runs,eligible_lane;
 static void incarnation_policy(spu_context* c)
@@ -245,14 +278,11 @@ int main(void)
     atomic_store(&gate,1);wait_for(&done[0],1,"surviving instance completion");finalize(0x1000);
     puts("SPURS independent instance admission / stop return / queue ownership PASS");
 
-    pthread_t a,b;
-    assert(!pthread_create(&a,NULL,direct,(void*)0));assert(!pthread_create(&b,NULL,direct,(void*)1));
-    pthread_join(a,NULL);pthread_join(b,NULL);
+    run_pair(direct);
     assert(direct_rc[0]==0 && direct_rc[1]==0 && atomic_load(&direct_leave)==2);
     assert(atomic_load(&direct_ctx[0])!=atomic_load(&direct_ctx[1]));
     spurs_policy_release_instance(0x11000);spurs_policy_release_instance(0x12000);
-    assert(!pthread_create(&a,NULL,error_direct,(void*)0));assert(!pthread_create(&b,NULL,error_direct,(void*)1));
-    pthread_join(a,NULL);pthread_join(b,NULL);assert(direct_rc[0]==-2 && direct_rc[1]==0);
+    run_pair(error_direct);assert(direct_rc[0]==-2 && direct_rc[1]==0);
     spurs_policy_release_instance(0x11000);spurs_policy_release_instance(0x12000);
     puts("SPURS same workload/lane across instances retains separate LS and TLS exit classification PASS");
     free(vm_base);return 0;
