@@ -59,6 +59,7 @@ static u32 rsx_record_color_masks(const rsx_state* state)
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
+#pragma comment(lib, "bcrypt.lib")
 
 /* ---------------------------------------------------------------------------
  * Constants
@@ -201,6 +202,7 @@ typedef struct {
 typedef struct {
     u32 hash;               /* FNV-1a of the ucode */
     ID3DBlob* vs;
+    char* disk_source; /* Retained original HLSL only for disk-origin recovery. */
     int uses_c03;
 } VPVSEntry;
 #define VP_VS_CACHE 16  /* wave uses 5+ distinct VPs; at 4 the cache
@@ -1341,36 +1343,8 @@ static int vp_upload_retire(void* context)
         s_d3d.fence_values[s_d3d.frame_index];
 }
 
-#include "rsx_shader_cache.h"
 #include "rsx_slot_pool.h"
-static rsx_shader_cache s_fp_bytecode;
-static u64 s_fp_bytecode_hits,s_fp_bytecode_misses,s_fp_bytecode_failures,s_fp_bytecode_refusals;
-static void fp_blob_retain(void* context,void* pointer)
-{ (void)context;ID3DBlob* b=(ID3DBlob*)pointer;b->lpVtbl->AddRef(b); }
-static void fp_blob_release(void* context,void* pointer)
-{ (void)context;ID3DBlob* b=(ID3DBlob*)pointer;b->lpVtbl->Release(b); }
-static const rsx_shader_blob_ops s_fp_blob_ops={NULL,fp_blob_retain,fp_blob_release};
-static HRESULT fp_compile_cached(u32 fp,const char* source,ID3DBlob** blob,ID3DBlob** error)
-{
-    rsx_shader_key key={source,strlen(source),"guest_fp","main","ps_5_0",0,0};
-    *error=NULL;*blob=(ID3DBlob*)rsx_shader_cache_get(&s_fp_bytecode,&key,&s_fp_blob_ops);
-    if(*blob){s_fp_bytecode_hits++;return S_OK;}
-    s_fp_bytecode_misses++;
-    ULONGLONG start=GetTickCount64();
-    HRESULT hr=D3DCompile(source,key.bytes,key.name,NULL,NULL,key.entry,key.target,
-                          key.flags1,key.flags2,blob,error);
-    ULONGLONG elapsed=GetTickCount64()-start;
-    if(perf_on()&&elapsed>=250)
-        fprintf(stderr,"[FPCOMPILE] fp=%08X elapsed_ms=%llu tick=%llu source_bytes=%zu cached=%u\n",
-                fp,(unsigned long long)elapsed,(unsigned long long)start,key.bytes,s_fp_bytecode.count);
-    if(FAILED(hr))s_fp_bytecode_failures++;
-    if(SUCCEEDED(hr)&&*blob && !rsx_shader_cache_put(&s_fp_bytecode,&key,*blob,
-            (*blob)->lpVtbl->GetBufferSize(*blob),&s_fp_blob_ops)) {
-        s_fp_bytecode_refusals++;
-        fprintf(stderr,"[FPCACHE] Successful fp=%08X bytecode not retained: allocation/budget refusal\n",fp);
-    }
-    return hr;
-}
+#include "rsx_shader_bytecode_backend.h"
 
 #include "rsx_gpu_references.h"
 static rsx_gpu_references s_gpu_pso_refs;
@@ -1970,8 +1944,8 @@ static int vp_get_vs(const rsx_state* st)
         }
     }
     ID3DBlob* vb = NULL; ID3DBlob* e = NULL;
-    HRESULT hr = D3DCompile(hlsl, strlen(hlsl), "guest_vp2", NULL, NULL,
-                            "main", "vs_5_0", 0, 0, &vb, &e);
+    char* disk_source=NULL;
+    HRESULT hr = shader_compile_vs(hlsl,&vb,&e,&disk_source);
     if (e) e->lpVtbl->Release(e);
     if (FAILED(hr) || !vb) {
         static int _e=0; if (_e++<4) printf("[VP] per-draw VS compile FAIL (hash=0x%08X)\n", hash);
@@ -1980,12 +1954,15 @@ static int vp_get_vs(const rsx_state* st)
     int slot;
     if (s_d3d.vp_vs_n < VP_VS_CACHE) slot = s_d3d.vp_vs_n++;
     else {  /* evict slot 0 */
+        shader_forget_vs_source(s_d3d.vp_vs[0].disk_source);
         if (s_d3d.vp_vs[0].vs) s_d3d.vp_vs[0].vs->lpVtbl->Release(s_d3d.vp_vs[0].vs);
         memmove(&s_d3d.vp_vs[0], &s_d3d.vp_vs[1], sizeof(VPVSEntry)*(VP_VS_CACHE-1));
         slot = VP_VS_CACHE - 1;
     }
     s_d3d.vp_vs[slot].hash = hash;
     s_d3d.vp_vs[slot].vs   = vb;
+    s_d3d.vp_vs[slot].disk_source=disk_source;
+    if(disk_source)s_vs_disk_source_bytes+=strlen(disk_source)+1;
     s_d3d.vp_vs[slot].uses_c03 =
         (strstr(hlsl, "vp_c[0]") || strstr(hlsl, "vp_c[1]") ||
          strstr(hlsl, "vp_c[2]") || strstr(hlsl, "vp_c[3]")) ? 1 : 0;
@@ -2004,6 +1981,8 @@ static int vp_get_vs(const rsx_state* st)
     }
     return slot;
 }
+
+#include "rsx_shader_pso_recovery.h"
 
 /* --- Guest blend state -> packed PSO key ----------------------------------
  * RSX blend factors/equation carry GL enums; each SFACTOR/DFACTOR/EQUATION
@@ -2553,8 +2532,8 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     pd.SampleDesc.Count = 1;
 
     ID3D12PipelineState* pso = NULL;
-    hr = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(
-        s_d3d.device, &pd, &IID_ID3D12PipelineState, (void**)&pso);
+    double shader_driver_seconds=0;
+    hr=shader_create_pso(&pd,hlsl,vs_idx,&vsb,&pb,s_fp_disk_origin,&pso,&shader_driver_seconds);
     if (SUCCEEDED(hr)) rdoc_name_pso(pso,fp_addr,vs_idx);
     const u32 diag_shader_id = SUCCEEDED(hr) ? scene_bound_shader(hlsl, pb, &pd) : 0;
     pb->lpVtbl->Release(pb);
@@ -7038,6 +7017,9 @@ void rsx_d3d12_backend_shutdown(void)
     cpu_surface_shutdown();
 
     address_retire();
+    for(int i=0;i<s_d3d.vp_vs_n;i++){
+        shader_forget_vs_source(s_d3d.vp_vs[i].disk_source);s_d3d.vp_vs[i].disk_source=NULL;
+    }
     rsx_shader_cache_clear(&s_fp_bytecode,&s_fp_blob_ops);
     if (!gpu_pso_retire()) {
         fprintf(stderr, "[RSXPSO] Pipeline shutdown retirement failed\n");

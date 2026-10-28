@@ -26,6 +26,7 @@ typedef struct {
 typedef struct {
     rsx_shader_key key; void *storage, *blob;
     size_t cost; uint64_t hash, stamp;
+    unsigned tag; /* Caller provenance; never part of shader identity. */
 } rsx_shader_cache_entry;
 typedef struct {
     rsx_shader_cache_entry entries[RSX_SHADER_CACHE_ENTRIES];
@@ -43,6 +44,34 @@ static int rsx_shader_key_equal(const rsx_shader_key* a,const rsx_shader_key* b)
     return a->bytes==b->bytes && a->flags1==b->flags1 && a->flags2==b->flags2 &&
         !strcmp(a->name,b->name) && !strcmp(a->entry,b->entry) &&
         !strcmp(a->target,b->target) && !memcmp(a->source,b->source,a->bytes);
+}
+static int rsx_shader_key_copy(const rsx_shader_key* k,rsx_shader_key* out,void** storage)
+{
+    if(!k || !k->source || !k->bytes || k->bytes>1024u*1024u ||
+       !k->name || !k->entry || !k->target)return 0;
+    size_t n=strlen(k->name)+1,e=strlen(k->entry)+1,t=strlen(k->target)+1;
+    if(n>256 || e>256 || t>256)return 0;
+    unsigned char* p=(unsigned char*)malloc(k->bytes+n+e+t);if(!p)return 0;
+    *out=*k;memcpy(p,k->source,k->bytes);out->source=p;
+    memcpy(p+k->bytes,k->name,n);out->name=(char*)p+k->bytes;
+    memcpy(p+k->bytes+n,k->entry,e);out->entry=(char*)p+k->bytes+n;
+    memcpy(p+k->bytes+n+e,k->target,t);out->target=(char*)p+k->bytes+n+e;
+    *storage=p;return 1;
+}
+static unsigned rsx_shader_cache_tag(const rsx_shader_cache* c,const rsx_shader_key* k)
+{
+    uint64_t hash=rsx_shader_key_hash(k);
+    for(unsigned i=0;i<RSX_SHADER_CACHE_ENTRIES;i++)
+        if(c->entries[i].blob && c->entries[i].hash==hash &&
+           rsx_shader_key_equal(&c->entries[i].key,k))return c->entries[i].tag;
+    return 0;
+}
+static void rsx_shader_cache_set_tag(rsx_shader_cache* c,const rsx_shader_key* k,unsigned tag)
+{
+    uint64_t hash=rsx_shader_key_hash(k);
+    for(unsigned i=0;i<RSX_SHADER_CACHE_ENTRIES;i++)
+        if(c->entries[i].blob && c->entries[i].hash==hash &&
+           rsx_shader_key_equal(&c->entries[i].key,k)){c->entries[i].tag=tag;return;}
 }
 static void* rsx_shader_cache_get(rsx_shader_cache* c,const rsx_shader_key* k,
                                  const rsx_shader_blob_ops* ops)
@@ -64,6 +93,14 @@ static void rsx_shader_cache_drop(rsx_shader_cache* c,unsigned i,
     if(!e->blob)return;
     ops->release(ops->context,e->blob); free(e->storage);
     c->bytes-=e->cost;c->count--;memset(e,0,sizeof(*e));
+}
+static void rsx_shader_cache_remove(rsx_shader_cache* c,const rsx_shader_key* k,
+                                    const rsx_shader_blob_ops* ops)
+{
+    uint64_t hash=rsx_shader_key_hash(k);
+    for(unsigned i=0;i<RSX_SHADER_CACHE_ENTRIES;i++)
+        if(c->entries[i].blob && c->entries[i].hash==hash &&
+           rsx_shader_key_equal(&c->entries[i].key,k))rsx_shader_cache_drop(c,i,ops);
 }
 static int rsx_shader_cache_put(rsx_shader_cache* c,const rsx_shader_key* k,
                                 void* blob,size_t blob_bytes,
