@@ -2195,6 +2195,15 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
             s_d3d.vp_fp[i].cube_mask == cube_mask &&
             s_d3d.vp_fp[i].alias_key == alias_key)
             return s_d3d.vp_fp[i].pso;
+    if(shader_prefetch_active){
+        struct {u32 address,control,cube,mask,cull,blend,alias_mask;int nrt;u32 format;u64 alias;u32 remap[16],points;} recipe;
+        memset(&recipe,0,sizeof(recipe));recipe.address=fp_addr;recipe.control=(u32)exp32;
+        recipe.cube=cube_mask;recipe.mask=cmask;recipe.cull=cull;recipe.blend=blend;recipe.nrt=nrt;recipe.format=(u32)rtfmt;
+        recipe.alias=alias_key;recipe.alias_mask=alias_mask;recipe.points=alias_points;memcpy(recipe.remap,alias_remap,sizeof(alias_remap));
+        u32 bytes=rsx_fp_program_size(vm_base+off,4096);
+        /* This fork still emits literal constants; include their exact payloads. */
+        if(bytes && shader_prefetch_duplicate(&recipe,sizeof(recipe),vm_base+off,bytes))return NULL;
+    }
     s_perf_pso_miss++;      /* falls through to a full decompile + D3DCompile */
     /* PSOMISSDBG=1: on a miss, name the key field that differs from an existing
      * entry for the same program. "the cache misses" is not actionable; "it
@@ -2445,7 +2454,18 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
         abort();
     }
     ID3DBlob* pb = NULL; ID3DBlob* e = NULL;
-    HRESULT hr = fp_compile_cached(fp_addr, hlsl, &pb, &e);
+    ULONGLONG fp_compile_start=GetTickCount64();
+    HRESULT hr = fp_compile_cached(fp_addr,hlsl,&pb,&e);
+    ULONGLONG fp_compile_elapsed=GetTickCount64()-fp_compile_start;
+    if(!shader_prefetch_active && perf_on() && fp_compile_elapsed>=250)
+        fprintf(stderr,"[FPCOMPILE] fp=%08X elapsed_ms=%llu tick=%llu source_bytes=%zu cached=%u\n",
+            fp_addr,(unsigned long long)fp_compile_elapsed,(unsigned long long)fp_compile_start,
+            strlen(hlsl),s_fp_bytecode.count);
+    if(shader_prefetch_active){
+        if(pb)pb->lpVtbl->Release(pb);
+        if(e)e->lpVtbl->Release(e);
+        return NULL;
+    }
     if (FAILED(hr) || !pb) {
         scene_bound_failed_shader(fp_addr,hlsl,e);
         static int _e2=0; if (_e2++<16)
@@ -4012,6 +4032,22 @@ static void guest_fb_present(u32 fi)
 }
 
 
+static void shader_compile_draw(D3D12DrawRecord* dr)
+{
+        if (dr->fp_addr) vp_get_fp_pso(dr->vs_idx, dr->fp_addr, dr->blend_key,
+                                       dr_num_rts(dr),
+                                       dr->rt_off ? rsx_surface_dxgi(dr->rt_fmt)
+                                                  : DXGI_FORMAT_R8G8B8A8_UNORM,
+                                       dr->fp_exp32, dr->cmask, dr->cull, dr_cube_mask(dr), dr);
+}
+
+static void shader_prepare_draw(D3D12DrawRecord* dr,int use_pool)
+{
+    shader_prefetch_active=use_pool;
+    shader_compile_draw(dr);
+    shader_prefetch_active=0;
+}
+
 static void render_frame(void)
 {
     double _rf0 = perf_on() ? perf_now() : 0.0;
@@ -4305,6 +4341,10 @@ static void render_frame(void)
      * (tex_slot 1000+idx) -- no guest-memory upload. */
     double _pre0 = perf_on() ? perf_now() : 0.0;
     for (unsigned _i = 0; _i < s_d3d.vp_tex_capacity; _i++) s_d3d.vp_tex[_i].used = 0;
+    int shader_prefetch_pass=shader_pool_on();
+    if(shader_prefetch_pass){
+        shader_prefetch_generation++;rsx_prefetch_begin(&s_shader_seen);
+    }
     for (u32 _d = 0; _d < s_d3d.draw_count && _d < MAX_DRAWS; _d++) {
         D3D12DrawRecord* dr = &s_d3d.draws[_d];
         if (!dr->is_vp || dr->is_clear) continue;
@@ -4483,12 +4523,20 @@ static void render_frame(void)
         }
         if (perf_on()) s_perf_srv += perf_now() - _sv0;
         double _ps0 = perf_on() ? perf_now() : 0.0;
-        if (dr->fp_addr) vp_get_fp_pso(dr->vs_idx, dr->fp_addr, dr->blend_key,
-                                       dr_num_rts(dr),
-                                       dr->rt_off ? rsx_surface_dxgi(dr->rt_fmt)
-                                                  : DXGI_FORMAT_R8G8B8A8_UNORM,
-                                       dr->fp_exp32, dr->cmask, dr->cull, dr_cube_mask(dr), dr);
+        shader_prepare_draw(dr,shader_prefetch_pass);
         if (perf_on()) s_perf_pso += perf_now() - _ps0;
+    }
+
+    if(shader_prefetch_pass){
+        shader_prefetch_active=0;
+        double shader_owner_begin=perf_now();
+        for(u32 d=0;d<s_d3d.draw_count && d<MAX_DRAWS;d++){
+            D3D12DrawRecord* dr=&s_d3d.draws[d];
+            if(dr->is_vp && !dr->is_clear)shader_compile_draw(dr);
+        }
+        if(perf_on())s_perf_pso+=perf_now()-shader_owner_begin;
+        if(shader_cache_stats())fprintf(stderr,"[FXCPOOL] queued=%u claimed=%u disk_hits=%u disk_stores=%u\n",
+            shader_queued,shader_claimed,shader_disk_hits,shader_disk_stores);
     }
 
     /* Transition render target to RENDER_TARGET state */
@@ -7020,6 +7068,7 @@ void rsx_d3d12_backend_shutdown(void)
     for(int i=0;i<s_d3d.vp_vs_n;i++){
         shader_forget_vs_source(s_d3d.vp_vs[i].disk_source);s_d3d.vp_vs[i].disk_source=NULL;
     }
+    shader_pool_finish();
     rsx_shader_cache_clear(&s_fp_bytecode,&s_fp_blob_ops);
     if (!gpu_pso_retire()) {
         fprintf(stderr, "[RSXPSO] Pipeline shutdown retirement failed\n");
