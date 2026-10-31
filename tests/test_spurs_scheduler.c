@@ -1,8 +1,11 @@
 /* Manufactured policy modules exercise the real initializer, scheduler and
  * SPU policy execution. No game code, addresses or completion substitutions. */
+#include "spurs_scheduler_observer_fixture.h"
 #define spu_workload_dispatch_async fixture_unbounded_dispatch
 #include "../libs/spurs/cellSpurs.c"
 #undef spu_workload_dispatch_async
+/* Keep lock witnesses active for authored policies that use ef_line_end,
+ * whose paired unlock lives in the actual production implementation. */
 #include <assert.h>
 #include <stdatomic.h>
 #include "../runtime/spu/spu_coherency.h"
@@ -47,6 +50,7 @@ static atomic_uint entered, produced, finished, release_consumer;
 static atomic_uint consumer_lane,producer_lane;
 static void finish(spu_context* c)
 {
+    trace_check_context(c);
     u32 ea=spu_ls_read32(c,0x1C4),wid=spu_ls_read32(c,0x1DC);
     /* The manufactured guest removes itself from the runnable set. */
     vm_write8(ea+0x80+wid,3);
@@ -97,12 +101,14 @@ static void held_policy(spu_context* c)
 static atomic_uint fast_visits,late_seen;
 static void fast_policy(spu_context* c)
 {
+    trace_check_context(c);
     atomic_fetch_add(&fast_visits,1);
     c->pc=SPURS_PM_EXIT_TO_KERNEL_LS;spu_indirect_branch(c);
 }
 static void late_policy(spu_context* c) { atomic_store(&late_seen,1);finish(c); }
 static void stopped_policy(spu_context* c)
 {
+    trace_check_context(c);
     vm_write8(spu_ls_read32(c,0x1C4)+0x80+spu_ls_read32(c,0x1DC),3);
     atomic_store(&late_seen,1);spu_halt(c);
 }
@@ -181,6 +187,7 @@ static void register_pm(unsigned ea,unsigned byte,spu_lifted_entry_fn fn,int ima
 }
 int main(void)
 {
+    trace_setup();
     vm_base=calloc(1,ppu_vm_size);assert(vm_base);
     register_pm(0x9000,0x11,consumer,77);register_pm(0x9100,0x22,producer,78);
     assert((u32)cellSpursInitialize((CellSpurs*)0x1000,7,0,0,0)==CELL_SPURS_CORE_ERROR_INVAL);
@@ -317,5 +324,31 @@ int main(void)
     assert(!g_spurs_pm_polls && !g_spurs_pm_exited && !g_wws_batch_gets &&
            "rejected policy retained preceding worker productivity");
     puts("SPURS rejected policy clears runner-local counters before admission PASS");
+    trace_validate();
+#if PS3_SPURS_SCHEDULER_OBSERVATION
+    /* Each phase starts after genuine joins, never a live observer reinstall. */
+    atomic_store(&trace_phase,1);
+    assert(cellSpursInitialize((CellSpurs*)0x1000,1,0,0,0)==0);finalize(0x1000);
+    atomic_store(&trace_phase,2);
+    unsigned trace_before=atomic_load(&trace_count);
+    atomic_store(&late_seen,0);
+    assert(cellSpursInitialize((CellSpurs*)0x1000,1,0,0,0)==0);
+    assert(cellSpursAddWorkload((CellSpurs*)0x1000,(u32*)0x8000,(void*)0x9400,16,0,NULL,1,1)==0);
+    wait_for(&late_seen,1,"filtered observation preserves actual work");finalize(0x1000);
+    assert(atomic_load(&trace_count)==trace_before);
+    atomic_store(&trace_phase,3);
+    s_trace_instance_epoch=s_trace_workload_epoch=UINT64_MAX;
+    atomic_store(&late_seen,0);
+    assert(cellSpursInitialize((CellSpurs*)0x1000,1,0,0,0)==0);
+    struct SpursInst* trace_instance=spurs_inst_find(0x1000);
+    AcquireSRWLockExclusive(&trace_instance->lock);
+    trace_instance->trace_dispatch=UINT64_MAX;
+    ReleaseSRWLockExclusive(&trace_instance->lock);
+    assert(cellSpursAddWorkload((CellSpurs*)0x1000,(u32*)0x8000,(void*)0x9400,16,0,NULL,1,1)==0);
+    wait_for(&late_seen,1,"identity exhaustion preserves actual work");finalize(0x1000);
+    assert(s_trace_instance_epoch==UINT64_MAX && s_trace_workload_epoch==UINT64_MAX);
+    assert(ps3_spurs_scheduler_observer_install(0));
+    puts("SPURS actual admission intervals / lifetime reuse / TLS / lock release / invalid clock / exhaustion PASS");
+#endif
     free(vm_base);return 0;
 }

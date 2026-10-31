@@ -1,0 +1,49 @@
+name: SPURS admission observations
+on:
+  push:
+    branches: [master, main, combined, 'codex/**']
+    paths:
+      - 'libs/spurs/**'
+      - 'runtime/diag/spurs_scheduler_observer.c'
+      - 'include/ps3emu/spurs_scheduler_observer.h'
+      - 'tests/test_spurs_scheduler.c'
+      - 'tests/spurs_scheduler_observer_fixture.h'
+      - 'tools/test_spurs_scheduler.py'
+      - 'CMakeLists.txt'
+      - '.github/workflows/spurs-admission-observers.yml'
+  pull_request:
+    paths:
+      - 'libs/spurs/**'
+      - 'runtime/diag/spurs_scheduler_observer.c'
+      - 'include/ps3emu/spurs_scheduler_observer.h'
+      - 'tests/test_spurs_scheduler.c'
+      - 'tests/spurs_scheduler_observer_fixture.h'
+      - 'tools/test_spurs_scheduler.py'
+      - 'CMakeLists.txt'
+      - '.github/workflows/spurs-admission-observers.yml'
+  workflow_dispatch:
+jobs:
+  admission:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - run: python tools/test_spurs_scheduler.py --observe --mutants --observer-mutants --syntax --output build/spurs-admission-observer-tests
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: admission-${{ matrix.os }}
+          path: |
+            build/spurs-admission-observer-tests/**/*.log
+            build/spurs-admission-observer-tests/**/*.json
+          retention-days: 5
