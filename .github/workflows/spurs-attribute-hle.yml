@@ -1,0 +1,31 @@
+name: SPURS workload attribute HLE
+on:
+  push:
+    branches: [master, main, combined, 'codex/**']
+    paths: ['libs/spurs/**', 'runtime/ppu/**', 'runtime/memory/**', 'include/**', 'tools/gen_hle_nids.py', 'tools/test_spurs_attribute_hle.py', 'tools/test_spurs_scheduler.py', 'tests/test_spurs_attribute_hle.cpp', 'tests/test_spurs_scheduler.c', '.github/workflows/spurs-attribute-hle.yml']
+  pull_request:
+    paths: ['libs/spurs/**', 'runtime/ppu/**', 'runtime/memory/**', 'include/**', 'tools/gen_hle_nids.py', 'tools/test_spurs_attribute_hle.py', 'tools/test_spurs_scheduler.py', 'tests/test_spurs_attribute_hle.cpp', 'tests/test_spurs_scheduler.c', '.github/workflows/spurs-attribute-hle.yml']
+  workflow_dispatch:
+jobs:
+  hle:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - run: python tools/test_spurs_attribute_hle.py --mutants
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spurs-attribute-hle-${{ matrix.os }}
+          path: build/spurs-attribute-hle/*.log
+          retention-days: 5
