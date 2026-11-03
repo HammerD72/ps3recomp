@@ -52,8 +52,11 @@ static int address_record_matches(const D3D12DrawRecord* dr)
 /* Returns true when changing heaps invalidated the caller's cached SRV table. */
 static int address_bind(const D3D12DrawRecord* dr, ID3D12PipelineState* pso)
 {
-    unsigned mask = pso == s_d3d.pipeline_state_vp ? 1u : 0u;
-    int found = pso == s_d3d.pipeline_state_vp || pso == s_d3d.pipeline_state_vp_color;
+    unsigned mask = pso == s_d3d.pipeline_state_vp ||
+                    pso == s_d3d.pipeline_state_vp_no_depth ? 1u : 0u;
+    int found = pso == s_d3d.pipeline_state_vp || pso == s_d3d.pipeline_state_vp_color ||
+                pso == s_d3d.pipeline_state_vp_no_depth ||
+                pso == s_d3d.pipeline_state_vp_color_no_depth;
     for (int i = 0; i < s_d3d.vp_fp_store.count; ++i)
         if (s_d3d.vp_fp[i].pso == pso) {
             mask = s_d3d.vp_fp[i].sampler_mask; found = 1; break;

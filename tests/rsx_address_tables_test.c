@@ -63,6 +63,7 @@ static struct {
     ID3D12GraphicsCommandList* cmd_list;
     ID3D12DescriptorHeap* srv_heap;
     ID3D12PipelineState *pipeline_state_vp, *pipeline_state_vp_color;
+    ID3D12PipelineState *pipeline_state_vp_no_depth, *pipeline_state_vp_color_no_depth;
     struct { unsigned count; } vp_fp_store;
     struct { ID3D12PipelineState* pso; unsigned sampler_mask; } vp_fp[1];
 } s_d3d;
@@ -107,6 +108,16 @@ int main(int argc, char** argv)
     assert(!address_bind(&dr, pso)); /* Same heap is stable. */
     assert(heaps_live == 2 && releases == 0 && root_binds == 133 && heap_binds == 3);
     assert(rsx_address_sampler_mask("rsx_samp[7]") == 128);
+    /* Both depth variants keep their shader's existing sampler identity. */
+    s_d3d.pipeline_state_vp = (ID3D12PipelineState*)(uintptr_t)0x50;
+    s_d3d.pipeline_state_vp_color = (ID3D12PipelineState*)(uintptr_t)0x51;
+    s_d3d.pipeline_state_vp_no_depth = (ID3D12PipelineState*)(uintptr_t)0x52;
+    s_d3d.pipeline_state_vp_color_no_depth = (ID3D12PipelineState*)(uintptr_t)0x53;
+    dr.tex[0].set = 1; dr.tex[0].address = 0x20202;
+    address_bind(&dr, s_d3d.pipeline_state_vp_no_depth);
+    assert(s_address_heaps->tables[s_address_heaps->count - 1][0].AddressU == D3D12_TEXTURE_ADDRESS_MODE_MIRROR);
+    address_bind(&dr, s_d3d.pipeline_state_vp_color_no_depth);
+    assert(s_address_heaps->tables[s_address_heaps->count - 1][0].AddressU == D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
     if (argc > 1 && !strcmp(argv[1], "--fail-retire")) retire_ok = 0;
     address_retire();
     assert(heaps_live == 0 && releases == 2 && retired == 1 && !s_address_heaps && !s_address_bound);

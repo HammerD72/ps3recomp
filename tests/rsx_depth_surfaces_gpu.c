@@ -8,6 +8,7 @@
 #include <d3d12sdklayers.h>
 #include <d3dcompiler.h>
 #include "rsx_d3d12_depth.h"
+#include "rsx_d3d12_fallback.h"
 #include "rsx_commands.h"
 
 static ID3D12Device* device;
@@ -26,7 +27,7 @@ static UINT rtv_step, dsv_step;
 static UINT64 fence_value;
 static HANDLE event_handle;
 static UINT slots[2];
-static int legacy, eager_depth, last_target = -1;
+static int legacy, eager_depth, fallback_depth, last_target = -1;
 static unsigned checks, failures;
 
 static void check(HRESULT result, const char* operation)
@@ -157,6 +158,7 @@ int main(int argc, char** argv)
         if (!strcmp(argv[i], "--hardware")) hardware = 1;
         else if (!strcmp(argv[i], "--legacy")) legacy = 1;
         else if (!strcmp(argv[i], "--eager-depth")) eager_depth = 1;
+        else if (!strcmp(argv[i], "--legacy-fallback-depth")) fallback_depth = 1;
         else return 2;
     }
     ID3D12Debug* debug = NULL;
@@ -302,8 +304,10 @@ int main(int argc, char** argv)
         &IID_ID3D12PipelineState, (void**)&stencil_pipeline), "stencil pipeline");
     state.DepthStencilState.StencilEnable = FALSE;
     state.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-    check(device->lpVtbl->CreateGraphicsPipelineState(device, &state,
-        &IID_ID3D12PipelineState, (void**)&color_pipeline), "color-only pipeline");
+    state.DepthStencilState.DepthEnable = TRUE;
+    state.DepthStencilState.StencilEnable = TRUE;
+    state.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    check(rsx_d3d12_fallback_no_depth(device, &state, &color_pipeline), "color-only fallback pipeline");
     clear_depth(0, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1, 7);
     clear_depth(1, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1, 0);
     draw(0, 0, 1, 0, 0, .2f, 0);
@@ -348,8 +352,44 @@ int main(int argc, char** argv)
     draw(0, 0, 0, 0, 1, 0, 1);
     pixel(0, 0xFFFF0000, "depth-only clears preserve the decoded stencil");
     rsx_set_backend(NULL);
+    ID3D12PipelineState* no_depth = color_pipeline;
+    /* A missing guest FP and a failed compile both supply a null compiled PSO;
+     * preserve the chosen fallback class and match the actual attachment. */
+    ID3D12PipelineState* missing_fp = rsx_d3d12_fallback_select(NULL, 0, 0,
+        pipeline, pipeline, no_depth, no_depth);
+    ID3D12PipelineState* failed_compile = rsx_d3d12_fallback_select(NULL, 1, 0,
+        pipeline, pipeline, no_depth, no_depth);
+    ++checks;
+    int fallback_ok = missing_fp == no_depth && failed_compile == no_depth &&
+        rsx_d3d12_fallback_select(pipeline, 1, 0, NULL, NULL, NULL, NULL) == pipeline &&
+        rsx_d3d12_fallback_select(NULL, 0, 1, pipeline, pipeline, no_depth, no_depth) == pipeline &&
+        rsx_d3d12_fallback_select(NULL, 1, 0, pipeline, pipeline, NULL, no_depth) == no_depth &&
+        rsx_d3d12_fallback_select(NULL, 0, 0, pipeline, pipeline, no_depth, NULL) == no_depth &&
+        rsx_d3d12_fallback_select(NULL, 0, 0, pipeline, pipeline, NULL, NULL) == NULL;
+    failures += !fallback_ok;
+    printf("%s compiled-and-fallback-attachment-selection\n", fallback_ok ? "PASS" : "FAIL");
+    color_pipeline = fallback_depth ? pipeline : missing_fp;
     draw(0, 0, 0, 1, 0, .5f, -1);
-    pixel(0, 0xFF00FF00, "color-only-null-DSV");
+    pixel(0, 0xFF00FF00, "missing-FP-fallback-null-DSV");
+    color_pipeline = fallback_depth ? pipeline : failed_compile;
+    draw(0, 0, 1, 0, 0, .5f, -1);
+    pixel(0, 0xFF0000FF, "failed-compile-fallback-null-DSV");
+    color_pipeline = no_depth;
+    /* The dynamic guest pipeline retains its decoded write mask even with
+     * both tests disabled. Validate that state with no DSV as well. */
+    state.DepthStencilState.DepthEnable = FALSE;
+    state.DepthStencilState.StencilEnable = FALSE;
+    state.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    state.DSVFormat = rsx_d3d12_depth_format(&state.DepthStencilState);
+    ID3D12PipelineState* dynamic_color = NULL;
+    check(device->lpVtbl->CreateGraphicsPipelineState(device, &state,
+        &IID_ID3D12PipelineState, (void**)&dynamic_color), "dynamic color-only pipeline");
+    color_pipeline = rsx_d3d12_fallback_select(dynamic_color, 1, 0,
+        pipeline, pipeline, no_depth, no_depth);
+    draw(0, 0, 0, 0, 1, .8f, -1);
+    pixel(0, 0xFFFF0000, "dynamic-write-mask-with-disabled-tests-null-DSV");
+    color_pipeline = no_depth;
+    dynamic_color->lpVtbl->Release(dynamic_color);
     if (messages) {
         UINT64 count = messages->lpVtbl->GetNumStoredMessages(messages);
         for (UINT64 i = 0; i < count; ++i) {

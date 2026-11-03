@@ -317,6 +317,8 @@ typedef struct {
     ID3D12RootSignature*  vp_root_sig;          /* CBV(b0) + SRV table + sampler */
     ID3D12PipelineState*  pipeline_state_vp;    /* decompiled VS + atlas PS      */
     ID3D12PipelineState*  pipeline_state_vp_color; /* decompiled VS + colour PS (untextured 3D) */
+    ID3D12PipelineState*  pipeline_state_vp_no_depth;
+    ID3D12PipelineState*  pipeline_state_vp_color_no_depth;
     ID3D12Resource*       vp_vb;                /* raw float4 attrib0, per-frame */
     void*                 vp_vb_mapped;
     u32                   vp_vb_offset;
@@ -1703,6 +1705,8 @@ static void rsx_capture_frame(u32 fi, u32 ndraws, u32 capidx)
            (unsigned long long)s_d3d.frame_count, dir, ndraws);
 }
 
+#include "rsx_d3d12_fallback.h"
+
 /* Decompile the captured RSX vertex program to HLSL and build the VP PSO
  * (decompiled VS + atlas alpha-test PS). One-shot per program. */
 static void compile_vp(void)
@@ -1793,8 +1797,11 @@ static void compile_vp(void)
     pd.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     pd.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
     pd.DepthStencilState.StencilEnable = FALSE;
+    pd.DSVFormat = rsx_d3d12_depth_format(&pd.DepthStencilState);
     pd.SampleDesc.Count = 1;
     hr = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(s_d3d.device, &pd, &IID_ID3D12PipelineState, (void**)&s_d3d.pipeline_state_vp);
+    if (SUCCEEDED(hr))
+        hr = rsx_d3d12_fallback_no_depth(s_d3d.device, &pd, &s_d3d.pipeline_state_vp_no_depth);
 
     /* Second PSO: same VS but a COLOUR-only PS (no texture sample, no alpha
      * discard) for untextured 3D geometry (vkcube's cube). The atlas PS above
@@ -1814,6 +1821,8 @@ static void compile_vp(void)
             HRESULT hr2 = s_d3d.device->lpVtbl->CreateGraphicsPipelineState(
                 s_d3d.device, &pd, &IID_ID3D12PipelineState,
                 (void**)&s_d3d.pipeline_state_vp_color);
+            if (SUCCEEDED(hr2))
+                hr2 = rsx_d3d12_fallback_no_depth(s_d3d.device, &pd, &s_d3d.pipeline_state_vp_color_no_depth);
             printf(SUCCEEDED(hr2) ? "[VP] colour pipeline ready\n"
                                   : "[VP] colour PSO FAIL (0x%08lX)\n", hr2);
             pcb->lpVtbl->Release(pcb);
@@ -2540,6 +2549,7 @@ static ID3D12PipelineState* vp_get_fp_pso(int vs_idx, u32 fp_addr, u32 blend, in
     pd.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     pd.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
     pd.DepthStencilState.StencilEnable = FALSE;
+    pd.DSVFormat = rsx_d3d12_depth_format(&pd.DepthStencilState);
     /* DEPTH_OFF=1: drop the depth test for guest-FP draws, so submission order
      * alone decides what is on top. Paired with DRAW_LAST_TEX this puts one
      * object in front of everything and answers "is it merely occluded?" --
@@ -4698,10 +4708,9 @@ static void render_frame(void)
             if (s_d3d.draws[d].is_vp) { any = 1; break; }
         /* Textured geometry (dbgfont atlas) uses the sampling PS; untextured 3D
          * (vkcube) uses the colour-only PS. Fall back to whichever exists. */
-        ID3D12PipelineState* vpso =
-            (s_d3d.tex_ready && s_d3d.pipeline_state_vp) ? s_d3d.pipeline_state_vp
-                                                         : s_d3d.pipeline_state_vp_color;
-        if (!vpso) vpso = s_d3d.pipeline_state_vp;
+        ID3D12PipelineState* vpso = rsx_d3d12_fallback_select(NULL, s_d3d.tex_ready, 1,
+            s_d3d.pipeline_state_vp, s_d3d.pipeline_state_vp_color,
+            s_d3d.pipeline_state_vp_no_depth, s_d3d.pipeline_state_vp_color_no_depth);
         { static int cap = -1, n = 0;
           if (cap < 0) { const char* e = getenv("VP_SUBMIT"); cap = e ? atoi(e) : 0; }
           if (cap && n < cap) { n++;
@@ -4872,8 +4881,10 @@ static void render_frame(void)
                                                            : DXGI_FORMAT_R8G8B8A8_UNORM,
                                                 dr->fp_exp32, dr->cmask, dr->cull,
                                                 dr_cube_mask(dr), dr) : NULL;
-                s_d3d.cmd_list->lpVtbl->SetPipelineState(s_d3d.cmd_list,
-                                                         dpso ? dpso : vpso);
+                ID3D12PipelineState* next_pso = rsx_d3d12_fallback_select(dpso, s_d3d.tex_ready, 1,
+                    s_d3d.pipeline_state_vp, s_d3d.pipeline_state_vp_color,
+                    s_d3d.pipeline_state_vp_no_depth, s_d3d.pipeline_state_vp_color_no_depth);
+                s_d3d.cmd_list->lpVtbl->SetPipelineState(s_d3d.cmd_list, next_pso);
                 /* Per-draw viewport: the guest rect when sane, else the
                  * full target. Scissor tracks the same rect. */
                 {
@@ -4912,7 +4923,7 @@ static void render_frame(void)
                 }
                 D3D12_GPU_DESCRIPTOR_HANDLE gh = gh_base;
                 gh.ptr += (u64)(DRAW_SRV_BASE + d * 4) * s_d3d.srv_inc;
-                address_bind(dr, dpso ? dpso : vpso);
+                address_bind(dr, next_pso);
                 s_d3d.cmd_list->lpVtbl->SetGraphicsRootDescriptorTable(s_d3d.cmd_list, 1, gh);
                 /* Per-draw constants: this draw's vp_cb + FP texscale slots. */
                 s_d3d.cmd_list->lpVtbl->SetGraphicsRootConstantBufferView(s_d3d.cmd_list, 0,
@@ -4958,9 +4969,9 @@ static void render_frame(void)
                           s_d3d.cmd_list, bn, brh, FALSE, &dsv_handle);
                   } }
                 cpu_surface_written(cur_rt,cur_m);
-                scene_bound_draw(d, DRAW_SRV_BASE+d*4, 4, dpso ? dpso : vpso);
-                gpu_pso_hold(dpso ? dpso : vpso);
-                gpu_submission_record(d,dr,dpso ? dpso : vpso);
+                scene_bound_draw(d, DRAW_SRV_BASE+d*4, 4, next_pso);
+                gpu_pso_hold(next_pso);
+                gpu_submission_record(d,dr,next_pso);
                 s_d3d.cmd_list->lpVtbl->DrawInstanced(s_d3d.cmd_list,
                     dr->vertex_count, 1, dr->vb_byte_offset / 256, 0);
                 scene_bound_after(d,cur_rt>=0?s_d3d.off_rt[cur_rt].res:s_d3d.render_targets[s_d3d.frame_index],
@@ -7089,6 +7100,10 @@ void rsx_d3d12_backend_shutdown(void)
     if (s_d3d.pipeline_state)        s_d3d.pipeline_state->lpVtbl->Release(s_d3d.pipeline_state);
     if (s_d3d.pipeline_state_lines)  s_d3d.pipeline_state_lines->lpVtbl->Release(s_d3d.pipeline_state_lines);
     if (s_d3d.pipeline_state_points) s_d3d.pipeline_state_points->lpVtbl->Release(s_d3d.pipeline_state_points);
+    if (s_d3d.pipeline_state_vp) s_d3d.pipeline_state_vp->lpVtbl->Release(s_d3d.pipeline_state_vp);
+    if (s_d3d.pipeline_state_vp_color) s_d3d.pipeline_state_vp_color->lpVtbl->Release(s_d3d.pipeline_state_vp_color);
+    if (s_d3d.pipeline_state_vp_no_depth) s_d3d.pipeline_state_vp_no_depth->lpVtbl->Release(s_d3d.pipeline_state_vp_no_depth);
+    if (s_d3d.pipeline_state_vp_color_no_depth) s_d3d.pipeline_state_vp_color_no_depth->lpVtbl->Release(s_d3d.pipeline_state_vp_color_no_depth);
     if (s_d3d.depth_buffer) s_d3d.depth_buffer->lpVtbl->Release(s_d3d.depth_buffer);
     if (s_d3d.dsv_heap)     s_d3d.dsv_heap->lpVtbl->Release(s_d3d.dsv_heap);
     if (s_d3d.root_signature) s_d3d.root_signature->lpVtbl->Release(s_d3d.root_signature);
