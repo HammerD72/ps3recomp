@@ -2,6 +2,7 @@
 #ifndef PS3RECOMP_RSX_CAPTURE_SCHEDULE_H
 #define PS3RECOMP_RSX_CAPTURE_SCHEDULE_H
 #include <stdint.h>
+#include <string.h>
 
 #define RSX_CAPTURE_BURST_MAX 120u
 #define RSX_CAPTURE_SCHEDULED 1u
@@ -11,6 +12,7 @@ typedef struct rsx_capture_schedule {
     uint32_t start, count, stride, done, index;
     uint32_t burst_remaining;
     int burst_seen;
+    int screen_only;
     int presented_mode;
     uint64_t presented_frames;
 } rsx_capture_schedule;
@@ -22,6 +24,15 @@ static inline void rsx_capture_schedule_init(rsx_capture_schedule* s,
     s->start = start;
     s->count = count;
     s->stride = stride ? stride : 1;
+}
+
+/* Explicit opt-in; invalid configuration leaves the current mode intact. */
+static inline int rsx_capture_schedule_screen_only(rsx_capture_schedule* s,
+    const char* value)
+{
+    if (value && strcmp(value, "0") && strcmp(value, "1")) return 0;
+    s->screen_only = value && !strcmp(value, "1");
+    return 1;
 }
 
 /* A marker can arm only one burst per process, even after exhaustion. */
@@ -53,6 +64,8 @@ static inline unsigned rsx_capture_schedule_next(rsx_capture_schedule* s,
     uint64_t frame, int has_draws, int presenting, uint32_t* index)
 {
     if (!has_draws) return 0;
+    /* A due screen sample stays due across offscreen capacity drains. */
+    if (s->screen_only && !presenting) return 0;
     if (s->presented_mode) {
         if (!presenting) return 0;
         frame = ++s->presented_frames;

@@ -5421,6 +5421,10 @@ skip_dump_consider: ;
             int n = cap ? sscanf(cap, "%u:%u:%u", &a, &b, &c) : 0;
             rsx_capture_schedule_init(&s_cap, (n >= 1 && a) ? a : 200,
                 cap ? ((n >= 2 && b) ? b : 1) : 0, (n >= 3 && c) ? c : 1);
+            if (!rsx_capture_schedule_screen_only(&s_cap, getenv("RSX_CAP_SCREEN_ONLY"))) {
+                fprintf(stderr, "[rsxcap] invalid RSX_CAP_SCREEN_ONLY (expected 0 or 1)\n");
+                abort();
+            }
             parsed = 1;
         }
         if (presented_arm && !s_cap.presented_mode) {
