@@ -51,7 +51,7 @@ def run(binary,entry,mode,flag='1',observed=False,red=False):
     else:assert result.returncode==0 and 'PASS' in result.stdout,entry['runs'][-1]
     print(('RED ' if red else 'PASS ')+entry['label']+' '+mode,flush=True)
 binary,entry=build(root,'production')
-for mode in ['owned','call-policy','unknown','owner-miss','overlap','invalid-range','budget','stop-boundary','admission']:run(binary,entry,mode)
+for mode in ['owned','call-policy','irq','dma-invalidate','unknown','owner-miss','overlap','invalid-range','budget','stop-boundary','admission']:run(binary,entry,mode)
 run(binary,entry,'observed',observed=True);run(binary,entry,'owned',flag='0',red=True);run(binary,entry,'owned',flag='invalid',red=True)
 binary,entry=build(root,'compiled-observers',observed=True)
 run(binary,entry,'observed')

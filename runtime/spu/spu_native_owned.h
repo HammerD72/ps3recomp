@@ -17,7 +17,7 @@ static inline int spu_native_owned_policy(const spu_context* ctx) {
 }
 static inline int spu_native_owned_can_run(const spu_context* ctx, uint32_t pc) {
     if (!spu_native_owned_policy(ctx) || ctx->image_id < 0 || !ctx->ls ||
-        pc >= SPU_LS_SIZE || (pc & 3) || ctx->irq_frame ||
+        pc >= SPU_LS_SIZE || (pc & 3) || ctx->irq_frame || ctx->irq_saved ||
         (ctx->int_enable && (ctx->event_status & ctx->event_mask)) ||
         g_spu_ls_watch_n > 0 || g_spu_ls_probe > 0 || g_spu_smc_watch > 0 ||
         spu_native_owned_observed()) return 0;

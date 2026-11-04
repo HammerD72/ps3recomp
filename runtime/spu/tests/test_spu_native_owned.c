@@ -6,11 +6,17 @@
 #include "../spu_native_owned.h"
 #include <fenv.h>
 #include "spu_native_owned_call.h"
-static unsigned native_calls;
+/* Report authored-fixture failures without Windows assertion dialogs. Runtime
+ * assertions and error handling remain unchanged. */
+#define OWNED_CHECK(x) do { if (!(x)) { fprintf(stderr,"FAIL %s:%d: %s\n",__FILE__,__LINE__,#x);exit(1); } } while (0)
+static unsigned native_calls, native_in_irq;
 static int call_policy;
+extern void spu_wrch(spu_context*,uint32_t,u128);
+extern u128 spu_rdch(spu_context*,uint32_t);
 static void forbidden_policy(spu_context* c) { (void)c; fputs("FORBIDDEN compiled policy\n",stderr); exit(2); }
 static void owned_job(spu_context* c) {
     ++native_calls;
+    if (c->irq_saved || c->irq_frame) ++native_in_irq;
     if (call_policy) {
         c->gpr[4]=c->gpr[0];
         spu_context* ctx=c;
@@ -25,7 +31,7 @@ int main(int argc,char** argv) {
 #ifdef _WIN32
     _set_error_mode(_OUT_TO_STDERR);_set_abort_behavior(0,_WRITE_ABORT_MSG|_CALL_REPORTFAULT);
 #endif
-    assert(argc==2);const char* mode=argv[1];
+    OWNED_CHECK(argc==2);const char* mode=argv[1];
     call_policy=!strcmp(mode,"call-policy");
     spu_context_init(&ctx,0);ctx.image_id=77;ctx.policy_mode=1;
     ctx.pc=0x200;ctx.status=SPU_STATUS_RUNNING;
@@ -44,6 +50,14 @@ int main(int argc,char** argv) {
     } else {
         word(0x4000,0x1C00C183);word(0x4004,0x35000000);
     }
+    if (!strcmp(mode,"irq")) {
+        ctx.int_enable=1;ctx.event_status=ctx.event_mask=1;
+        word(0,0x3000C000); /* bra 0x600 */
+        word(0x600,0x4080008A); /* il r10,1 */
+        word(0x604,0x21A0010A); /* wrch event-ack,r10 */
+        word(0x608,0x31080000); /* brasl r0,0x4000 while IRQ state is saved */
+        word(0x60C,0x35440000); /* enabled iret */
+    }
     if (strcmp(mode,"unknown")) {
         ctx.resident_code[0].lsa=0x4000;ctx.resident_code[0].size=0x14;
         ctx.resident_code[0].image_id=25;
@@ -52,6 +66,22 @@ int main(int argc,char** argv) {
             ctx.resident_code[1]=ctx.resident_code[0];ctx.resident_code[0].image_id=26;
         }
     }
+    if (!strcmp(mode,"dma-invalidate")) {
+        ppu_vm_size=0x20000;vm_base=calloc(1,ppu_vm_size);OWNED_CHECK(vm_base);
+        const uint8_t replacement[16]={0x1C,0x02,0x41,0x83,0x35,0,0,0};
+        memcpy(vm_base+0x10000,replacement,sizeof replacement);
+        spu_wrch(&ctx,MFC_LSA,spu_link(0x4000));
+        spu_wrch(&ctx,MFC_EAH,spu_link(0));
+        spu_wrch(&ctx,MFC_EAL,spu_link(0x10000));
+        spu_wrch(&ctx,MFC_Size,spu_link(sizeof replacement));
+        spu_wrch(&ctx,MFC_TagID,spu_link(3));
+        spu_wrch(&ctx,MFC_Cmd,spu_link(0x40)); /* actual MFC GET */
+        spu_wrch(&ctx,MFC_WrTagMask,spu_link(1u<<3));
+        spu_wrch(&ctx,MFC_WrTagUpdate,spu_link(2));
+        OWNED_CHECK(spu_rdch(&ctx,MFC_RdTagStat)._u32[0]==(1u<<3));
+        OWNED_CHECK(!memcmp(ctx.ls+0x4000,replacement,sizeof replacement));
+        OWNED_CHECK(ctx.resident_code[0].image_id==0);
+    }
     spu_begin_image(77);spu_register_function(0x200,forbidden_policy);
     spu_register_function(0x204,forbidden_policy);spu_register_function(0x300,forbidden_policy);
     spu_register_function(0x4000,forbidden_policy); /* stale primary must lose */
@@ -59,46 +89,56 @@ int main(int argc,char** argv) {
     if (strcmp(mode,"owner-miss")) spu_register_function(0x4000,owned_job);
 #ifndef OWNED_HISTORICAL
     if (!strcmp(mode,"admission")) {
-        assert(spu_native_owned_can_run(&ctx,0x4000));
+        OWNED_CHECK(spu_native_owned_can_run(&ctx,0x4000));
         int saved_watch=g_spu_ls_watch_n;
-        g_spu_ls_watch_n=-1;assert(spu_native_owned_can_run(&ctx,0x4000));
-        g_spu_ls_watch_n=0;assert(spu_native_owned_can_run(&ctx,0x4000));
-        g_spu_ls_watch_n=1;assert(!spu_native_owned_can_run(&ctx,0x4000));
+        g_spu_ls_watch_n=-1;OWNED_CHECK(spu_native_owned_can_run(&ctx,0x4000));
+        g_spu_ls_watch_n=0;OWNED_CHECK(spu_native_owned_can_run(&ctx,0x4000));
+        g_spu_ls_watch_n=1;OWNED_CHECK(!spu_native_owned_can_run(&ctx,0x4000));
         g_spu_ls_watch_n=saved_watch;
         ctx.int_enable=1;ctx.event_mask=ctx.event_status=1;
-        assert(!spu_native_owned_can_run(&ctx,0x4000));
+        OWNED_CHECK(!spu_native_owned_can_run(&ctx,0x4000));
         ctx.int_enable=0;ctx.irq_frame=(void*)&ctx;
-        assert(!spu_native_owned_can_run(&ctx,0x4000));ctx.irq_frame=NULL;
-        assert(!spu_native_owned_can_run(&ctx,0x4001));
-        assert(!spu_native_owned_can_run(&ctx,SPU_LS_SIZE));
+        OWNED_CHECK(!spu_native_owned_can_run(&ctx,0x4000));ctx.irq_frame=NULL;
+        ctx.irq_saved=1;OWNED_CHECK(!spu_native_owned_can_run(&ctx,0x4000));ctx.irq_saved=0;
+        OWNED_CHECK(!spu_native_owned_can_run(&ctx,0x4001));
+        OWNED_CHECK(!spu_native_owned_can_run(&ctx,SPU_LS_SIZE));
         puts("admission PASS");return 0;
     }
 #endif
     if (!strcmp(mode,"budget")) {
         spu_interp_run_until_budget(&ctx,0x200,0,2);
-        assert(!native_calls && ctx.pc==0x4004 && ctx.gpr[3]._u32[0]==3);
+        OWNED_CHECK(!native_calls && ctx.pc==0x4004 && ctx.gpr[3]._u32[0]==3);
         puts("budget PASS");return 0;
     }
     if (!strcmp(mode,"stop-boundary")) {
         spu_interp_run_until(&ctx,0x200,0x4000);
-        assert(!native_calls && ctx.pc==0x4000 && !ctx.gpr[3]._u32[0]);
+        OWNED_CHECK(!native_calls && ctx.pc==0x4000 && !ctx.gpr[3]._u32[0]);
         puts("stop-boundary PASS");return 0;
     }
     memcpy(&reference,&ctx,sizeof ctx);reference.ls=reference.ls_store;
     reference.image_id=-1; /* actual interpreter's existing pure-reference mode */
-    assert(!fesetround(FE_DOWNWARD));
-    assert(!feraiseexcept(FE_INVALID|FE_INEXACT));
+    OWNED_CHECK(!fesetround(FE_DOWNWARD));
+    OWNED_CHECK(!feraiseexcept(FE_INVALID|FE_INEXACT));
     int rounding=fegetround(), flags=fetestexcept(FE_ALL_EXCEPT);
     spu_run_with_halt(forbidden_policy,&reference);
-    assert(fegetround()==rounding && fetestexcept(FE_ALL_EXCEPT)==flags);
+    OWNED_CHECK(fegetround()==rounding && fetestexcept(FE_ALL_EXCEPT)==flags);
     spu_run_with_halt(forbidden_policy,&ctx);
-    assert(fegetround()==rounding && fetestexcept(FE_ALL_EXCEPT)==flags);
-    assert(!memcmp(ctx.gpr,reference.gpr,sizeof ctx.gpr));
-    assert(!memcmp(ctx.ls,reference.ls,SPU_LS_SIZE));
-    assert(ctx.status==reference.status && ctx.stop_code==reference.stop_code);
-    assert(ctx.gpr[3]._u32[0]==(call_policy?12u:5u));
-    unsigned expected=(!strcmp(mode,"owned")||call_policy)?1u:0u;
-    assert(native_calls==expected);
+    OWNED_CHECK(fegetround()==rounding && fetestexcept(FE_ALL_EXCEPT)==flags);
+    OWNED_CHECK(!memcmp(ctx.gpr,reference.gpr,sizeof ctx.gpr));
+    OWNED_CHECK(!memcmp(ctx.ls,reference.ls,SPU_LS_SIZE));
+    OWNED_CHECK(ctx.status==reference.status && ctx.stop_code==reference.stop_code);
+    OWNED_CHECK(ctx.event_status==reference.event_status && ctx.event_mask==reference.event_mask);
+    OWNED_CHECK(ctx.int_enable==reference.int_enable && ctx.irq_saved==reference.irq_saved);
+    if (!strcmp(mode,"irq")) {
+        OWNED_CHECK(ctx.event_status==0 && ctx.irq_saved==0 && ctx.int_enable==1 && ctx.srr0==0x200);
+        OWNED_CHECK(!ctx.irq_frame);
+    }
+    OWNED_CHECK(ctx.gpr[3]._u32[0]==(call_policy?12u:!strcmp(mode,"dma-invalidate")?11u:5u));
+    unsigned expected=(!strcmp(mode,"owned")||!strcmp(mode,"irq")||call_policy)?1u:0u;
+    if (native_calls!=expected || native_in_irq) {
+        fprintf(stderr,"FAIL native calls=%u expected=%u native_in_irq=%u\n",native_calls,expected,native_in_irq);exit(1);
+    }
     printf("%s PASS native=%u full GPR/LS/status/stop/FP parity\n",mode,native_calls);
+    free(vm_base);vm_base=NULL;ppu_vm_size=0;
     return 0;
 }

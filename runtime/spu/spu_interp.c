@@ -530,6 +530,11 @@ static uint32_t spu_interp_run_until_scoped_body(spu_context* ctx, uint32_t star
         if (budget && steps>=budget) {
             g_spu_interp_steps=steps; return ctx->pc;
         }
+        /* Owned-job mode must not consume an enabled IRQ window entirely
+         * inside the policy interpreter before the drain can observe it. */
+        if (spu_native_owned_policy(ctx) && ctx->int_enable && !ctx->irq_saved &&
+            (ctx->event_status & ctx->event_mask))
+            spu_take_interrupt(ctx,NULL);
         /* Match the lifted path: only synthetic HLE tasks may bypass the
          * resident policy. Real tasksets also store 0xA70 in their API table.
          * Preserve the legacy CRI return convention while invoking the HLE. */
