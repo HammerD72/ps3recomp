@@ -446,7 +446,7 @@ static void spu_drain_call_scoped_body(spu_context* ctx, uint32_t return_pc)
             void (*fn)(spu_context*) = g_spu_trampoline_fn;
             g_spu_trampoline_fn = 0;
             PS3_SPU_DISPATCH_BASE(fn);
-            ctx->drain_ret_pc = return_pc & SPU_LS_MASK;   /* re-set: a nested drain changed it */
+            ctx->drain_ret_pc = (return_pc & SPU_LS_MASK) ? (return_pc & SPU_LS_MASK) : SPU_LS_SIZE;   /* re-set: a nested drain changed it */
             yz_lockstep_tick(ctx);
             spu_task_launch_check(ctx, (void*)fn);
             if (ctx->int_enable && (ctx->event_status & ctx->event_mask)) {

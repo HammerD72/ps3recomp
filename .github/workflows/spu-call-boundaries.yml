@@ -1,0 +1,33 @@
+name: SPU native call return boundaries
+on:
+  push:
+    branches: [master, main, combined, 'codex/**']
+    paths: ['runtime/spu/**', 'runtime/platform/**', 'runtime/memory/**', 'include/**', 'tools/spu_lifter.py', 'tools/spu_disasm.py', 'tools/test_spu_call_boundaries.py', 'tools/update_spu_call_boundaries.py', '.github/workflows/spu-call-boundaries.yml']
+  pull_request:
+    paths: ['runtime/spu/**', 'runtime/platform/**', 'runtime/memory/**', 'include/**', 'tools/spu_lifter.py', 'tools/spu_disasm.py', 'tools/test_spu_call_boundaries.py', 'tools/update_spu_call_boundaries.py', '.github/workflows/spu-call-boundaries.yml']
+  workflow_dispatch:
+jobs:
+  transitions:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - run: python tools/test_spu_call_boundaries.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spu-call-boundaries-${{ matrix.os }}
+          path: |
+            temp/checks/call-boundaries-*/**/*.log
+            temp/checks/call-boundaries-*/**/*.json
+            temp/checks/call-boundaries-*/**/spu_call_brackets.h
+          retention-days: 5

@@ -255,6 +255,7 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
         /* A one-way guest stack reset invalidates every lifted host caller.
          * Re-enter its target with the same guest state on the driver stack. */
         ctx->host_depth = 0;
+        ctx->drain_ret_pc = 0;
         g_spu_trampoline_fn = 0;
         spu_indirect_branch(ctx);
         SPU_DRAIN(ctx);
@@ -275,6 +276,7 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
               fflush(stderr); } }
         SPU_DRAIN(ctx);
     }
+    ctx->drain_ret_pc = 0; /* no compiled caller survives this driver return */
     yz_lockstep_unregister(ctx);   /* leave the ring; hand the token onward */
     s_spu_halt_armed = outer_armed;
     if (outer_armed) memcpy(s_spu_halt_env, outer_env, sizeof(jmp_buf));
@@ -2043,7 +2045,7 @@ static int spu_smc_microstep(spu_context* ctx)
          * An already-owning drain must retain its own host continuation;
          * stopped states and diagnostic exits keep their existing behavior. */
         if (ctx->image_id >= 0 && (ctx->status & SPU_STATUS_RUNNING) &&
-            (!return_pc || (ctx->pc & SPU_LS_MASK) != return_pc) &&
+            (!return_pc || (ctx->pc & SPU_LS_MASK) != (return_pc & SPU_LS_MASK)) &&
             spu_lifted_lookup(ctx, ctx->pc)) {
             g_spu_trampoline_fn = spu_indirect_branch;
             return 1;
