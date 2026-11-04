@@ -22,6 +22,7 @@
  * base; spu_indirect_branch intercepts them (ctx->policy_mode) and HLEs the
  * kernel side: select = "no contention, keep running", exit = end of run.
  */
+#include "spu_native_owned.h"
 #include "spu_context.h"
 #include "spu_coherency.h"
 #include "../platform/win32_compat.h"
@@ -239,9 +240,10 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
     ctx->image_id    = image_id;
     ctx->policy_mode = 1;
 
+    const uint32_t policy_load_lsa=0xA00u;
     /* PM image at its load base (first entry only -- LS persists). */
     if (first)
-        memcpy(ctx->ls + 0xA00, pm_host, pm_size);
+        memcpy(ctx->ls + policy_load_lsa, pm_host, pm_size);
 
     /* SpursKernelContext at LS 0x100 (fields big-endian, like all guest data). */
     uint8_t* ls = ctx->ls;
@@ -392,6 +394,7 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
     unsigned batch_before = g_wws_batch_gets;
     unsigned claim_before = g_spu_putllc_sync_hit;
 
+    if (spu_native_owned_enabled()) ctx->pc=policy_load_lsa;
     const int pm_halted = spu_run_with_halt(entry, ctx);
     /* A lane's run should only end through exitToKernel. Anything else strands
      * the jobs it had claimed (GH3's once-per-~10-songs freeze): say how. */

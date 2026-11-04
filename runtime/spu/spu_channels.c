@@ -12,6 +12,7 @@
  * embed one), in a small lazily-populated registry.
  */
 
+#include "spu_native_owned.h"
 #include "spu_dma.h"
 #include "ps3emu/native_atomic_observer.h"
 void spu_halt(spu_context*); /* Policy trampolines can precede its definition. */
@@ -204,6 +205,41 @@ void spu_stop(spu_context* ctx)
 
 /* Run a lifted SPU entry with a halt landing pad. Returns 1 if the job halted
  * (via spu_halt), 0 if it returned normally. */
+int spu_native_owned_enabled(void) {
+    static SPU_THREAD_LOCAL int mode=-1;
+    if (mode<0) {
+        const char* value=getenv("SPU_NATIVE_OWNED_JOBS");
+        if (!value || !strcmp(value,"0")) mode=0;
+        else if (!strcmp(value,"1")) mode=1;
+        else { fprintf(stderr,"invalid SPU_NATIVE_OWNED_JOBS: expected 0 or 1\n"); abort(); }
+    }
+    return mode;
+}
+int spu_native_owned_observed(void) {
+#if PS3_EXECUTION_OBSERVATION || PS3_ATOMIC_OBSERVATION
+    return 1; /* retain the original interpreter observation granularity */
+#else
+    static SPU_THREAD_LOCAL int observed=-1;
+    if (observed<0) {
+        static const char* const options[]={"SPU_TRACE_CALLS","SPU_BOUNDARY_DIR",
+            "SPU_CALLTRACE","SPU_PCHIST","SPU_LS_LOWREAD","SPU_LS_WATCH",
+            "SPU_SMC_WATCH","SPU_STEPCAP","SPU_TRACE","YDKJ_SPU_TRACE","YDKJ_CRI_GATE1TRACE"};
+        observed=0;
+        for (unsigned i=0;i<sizeof(options)/sizeof(options[0]);++i)
+            observed |= getenv(options[i])!=NULL;
+    }
+    return observed;
+#endif
+}
+void spu_native_owned_interpret(spu_context* ctx) {
+    uint32_t stop=ctx->drain_ret_pc;
+    uint32_t next=spu_interp_run_until(ctx,ctx->pc,stop);
+    if (!(ctx->status & (SPU_STATUS_STOPPED_BY_STOP|SPU_STATUS_STOPPED_BY_HALT)) &&
+        !(stop && next==(stop & SPU_LS_MASK)) && !g_spu_trampoline_fn &&
+        spu_native_owned_can_run(ctx,next))
+        g_spu_trampoline_fn=spu_lifted_lookup(ctx,next);
+}
+
 int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
 {
     int halted = 0;
@@ -266,7 +302,8 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
          * returns; the drain loop re-enters each queued target until the SPU
          * halts (stop -> longjmp) or the trampoline empties. Nested brsl/bisl
          * calls drain inside their own call brackets (see the lifter). */
-        entry(ctx);
+        if (spu_native_owned_policy(ctx)) spu_indirect_branch(ctx);
+        else entry(ctx);
         { static int _e = 0;
           if (getenv("SPU_ARGWATCH") && _e < 8) { _e++;
               fprintf(stderr, "[argwatch] after entry(): img=%d pc=0x%05X "
@@ -2514,6 +2551,9 @@ void spu_indirect_branch(spu_context* ctx)
                   if (f) { fwrite(ctx->ls, 1, SPU_LS_SIZE, f); fclose(f);
                       fprintf(stderr, "[jobexec] dumped LS at job entry -> %s\n", dp); }
                   s_dumped = 1; } } }
+    }
+    if (spu_native_owned_policy(ctx) && !spu_native_owned_can_run(ctx,ctx->pc)) {
+        spu_native_owned_interpret(ctx); return;
     }
     if (fn) {
         spu_check_stack_reset(ctx, fn);

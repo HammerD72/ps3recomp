@@ -1,0 +1,104 @@
+/* Actual interpreter/drain/resolver, authored guest instructions. Link-only
+ * aborting boundaries are reused from the existing transition fixture. */
+#define main existing_handoff_main
+#include "test_spu_interpreter_handoff.c"
+#undef main
+#include "../spu_native_owned.h"
+#include <fenv.h>
+#include "spu_native_owned_call.h"
+static unsigned native_calls;
+static int call_policy;
+static void forbidden_policy(spu_context* c) { (void)c; fputs("FORBIDDEN compiled policy\n",stderr); exit(2); }
+static void owned_job(spu_context* c) {
+    ++native_calls;
+    if (call_policy) {
+        c->gpr[4]=c->gpr[0];
+        spu_context* ctx=c;
+        OWNED_POLICY_CALL;
+    }
+    c->gpr[3]=spu_ai(c->gpr[3],3);
+    if (call_policy) c->gpr[0]=c->gpr[4];
+    SPU_RET(c);
+}
+static spu_context reference;
+int main(int argc,char** argv) {
+#ifdef _WIN32
+    _set_error_mode(_OUT_TO_STDERR);_set_abort_behavior(0,_WRITE_ABORT_MSG|_CALL_REPORTFAULT);
+#endif
+    assert(argc==2);const char* mode=argv[1];
+    call_policy=!strcmp(mode,"call-policy");
+    spu_context_init(&ctx,0);ctx.image_id=77;ctx.policy_mode=1;
+    ctx.pc=0x200;ctx.status=SPU_STATUS_RUNNING;
+    word(0x200,0x31080000); /* brasl r0,0x4000 */
+    word(0x204,0x1C008183); /* ai r3,r3,2 */
+    word(0x208,0x00002123); /* original stop 0x2123 */
+    word(0x300,0x1C01C183); /* ai r3,r3,7 */
+    word(0x304,0x35000000); /* bi r0 */
+    if (call_policy) {
+        ctx.gpr[2]=spu_link(0x300);
+        word(0x4000,0x04000004); /* ori r4,r0,0 */
+        word(0x4004,0x35200100); /* bisl r0,r2: interpreted policy helper */
+        word(0x4008,0x1C00C183); /* ai r3,r3,3 */
+        word(0x400C,0x04000200); /* ori r0,r4,0 */
+        word(0x4010,0x35000000); /* bi r0 */
+    } else {
+        word(0x4000,0x1C00C183);word(0x4004,0x35000000);
+    }
+    if (strcmp(mode,"unknown")) {
+        ctx.resident_code[0].lsa=0x4000;ctx.resident_code[0].size=0x14;
+        ctx.resident_code[0].image_id=25;
+        if (!strcmp(mode,"invalid-range")) ctx.resident_code[0].size=SPU_LS_SIZE+1;
+        if (!strcmp(mode,"overlap")) {
+            ctx.resident_code[1]=ctx.resident_code[0];ctx.resident_code[0].image_id=26;
+        }
+    }
+    spu_begin_image(77);spu_register_function(0x200,forbidden_policy);
+    spu_register_function(0x204,forbidden_policy);spu_register_function(0x300,forbidden_policy);
+    spu_register_function(0x4000,forbidden_policy); /* stale primary must lose */
+    spu_begin_image(25);
+    if (strcmp(mode,"owner-miss")) spu_register_function(0x4000,owned_job);
+#ifndef OWNED_HISTORICAL
+    if (!strcmp(mode,"admission")) {
+        assert(spu_native_owned_can_run(&ctx,0x4000));
+        int saved_watch=g_spu_ls_watch_n;
+        g_spu_ls_watch_n=-1;assert(spu_native_owned_can_run(&ctx,0x4000));
+        g_spu_ls_watch_n=0;assert(spu_native_owned_can_run(&ctx,0x4000));
+        g_spu_ls_watch_n=1;assert(!spu_native_owned_can_run(&ctx,0x4000));
+        g_spu_ls_watch_n=saved_watch;
+        ctx.int_enable=1;ctx.event_mask=ctx.event_status=1;
+        assert(!spu_native_owned_can_run(&ctx,0x4000));
+        ctx.int_enable=0;ctx.irq_frame=(void*)&ctx;
+        assert(!spu_native_owned_can_run(&ctx,0x4000));ctx.irq_frame=NULL;
+        assert(!spu_native_owned_can_run(&ctx,0x4001));
+        assert(!spu_native_owned_can_run(&ctx,SPU_LS_SIZE));
+        puts("admission PASS");return 0;
+    }
+#endif
+    if (!strcmp(mode,"budget")) {
+        spu_interp_run_until_budget(&ctx,0x200,0,2);
+        assert(!native_calls && ctx.pc==0x4004 && ctx.gpr[3]._u32[0]==3);
+        puts("budget PASS");return 0;
+    }
+    if (!strcmp(mode,"stop-boundary")) {
+        spu_interp_run_until(&ctx,0x200,0x4000);
+        assert(!native_calls && ctx.pc==0x4000 && !ctx.gpr[3]._u32[0]);
+        puts("stop-boundary PASS");return 0;
+    }
+    memcpy(&reference,&ctx,sizeof ctx);reference.ls=reference.ls_store;
+    reference.image_id=-1; /* actual interpreter's existing pure-reference mode */
+    assert(!fesetround(FE_DOWNWARD));
+    assert(!feraiseexcept(FE_INVALID|FE_INEXACT));
+    int rounding=fegetround(), flags=fetestexcept(FE_ALL_EXCEPT);
+    spu_run_with_halt(forbidden_policy,&reference);
+    assert(fegetround()==rounding && fetestexcept(FE_ALL_EXCEPT)==flags);
+    spu_run_with_halt(forbidden_policy,&ctx);
+    assert(fegetround()==rounding && fetestexcept(FE_ALL_EXCEPT)==flags);
+    assert(!memcmp(ctx.gpr,reference.gpr,sizeof ctx.gpr));
+    assert(!memcmp(ctx.ls,reference.ls,SPU_LS_SIZE));
+    assert(ctx.status==reference.status && ctx.stop_code==reference.stop_code);
+    assert(ctx.gpr[3]._u32[0]==(call_policy?12u:5u));
+    unsigned expected=(!strcmp(mode,"owned")||call_policy)?1u:0u;
+    assert(native_calls==expected);
+    printf("%s PASS native=%u full GPR/LS/status/stop/FP parity\n",mode,native_calls);
+    return 0;
+}
