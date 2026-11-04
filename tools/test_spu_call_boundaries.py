@@ -17,6 +17,9 @@ def emission(module):
         func=module.LiftedFunction(name='test',start_addr=addr,end_addr=addr+4)
         ops={'DIRECT':0x31080006,'RELATIVE':0x33080086 if zero else 0x3307C006,'INDIRECT':0x35200106,'ALIAS':0x35200306}
         for key,word in ops.items():result+='#define EMIT_'+key+('_ZERO' if zero else '')+' '+lifter._translate(spu_decode(word,addr),func)+'\n'
+    for key,word,addr in [('IRQ_CALL',0x31010006,0x600),('IRQ_RETURN',0x35440000,0x800)]:
+        func=module.LiftedFunction(name='irq',start_addr=addr,end_addr=addr+4)
+        result+='#define EMIT_'+key+' '+lifter._translate(spu_decode(word,addr),func)+'\n'
     return result
 if args.historical_lifter:
     import importlib.util,sys
@@ -36,9 +39,9 @@ def build(source,label,historical=False,baseline=False):
         from update_spu_call_boundaries import update
         legacy=(spu/'tests/spu_call_brackets_legacy.h').read_text()
         rewritten,changed,existing=update(legacy)
-        assert changed==8 and existing==0
+        assert changed==9 and existing==0
         assert '\n'.join(rewritten.splitlines()[1:])+'\n'==header,'copy updater differs from actual emitter'
-        assert update(header)==(header,0,8),'copy updater is not idempotent'
+        assert update(header)==(header,0,9),'copy updater is not idempotent'
         try:update('spu_drain_call(ctx, variable_return);')
         except ValueError:pass
         else:raise AssertionError('unknown bracket silently accepted')
@@ -68,12 +71,12 @@ def run(binary,entry,case,red=False,baseline=False):
     result=subprocess.run([str(binary),str(case)],cwd=binary.parent,env=env,capture_output=True,text=True,timeout=10)
     entry['runs'].append({'case':case,'red':red,'returncode':result.returncode,'stdout':result.stdout,'stderr':result.stderr})
     (out/'result.json').write_text(json.dumps(report,indent=2))
-    if red:assert result.returncode!=0 and any(s in result.stderr for s in ['return boundary not published','interpreter passed native return boundary']),entry['runs'][-1]
+    if red:assert result.returncode!=0 and any(s in result.stderr for s in ['return boundary not published','interpreter passed native return boundary','outer return boundary not restored','return boundary queued compiled dispatch','compiled return entered while native caller owns it']),entry['runs'][-1]
     else:assert result.returncode==0 and ('PASS' if baseline else 'PASS exact call boundary') in result.stdout,entry['runs'][-1]
     print(('RED ' if red else 'PASS ')+entry['label']+' '+str(case),flush=True)
 for historical in (False,True):
     binary,entry=build(root,'historical' if historical else 'production',historical)
-    for case in range(8):run(binary,entry,case,historical)
+    for case in range(19):run(binary,entry,case,historical)
 binary,entry=build(root,'baseline',baseline=True)
 for case in ['top','top-zero','nested-return','nested-return-unlifted','nested-calls','stop-zero','nested-stop','stop-code','halt','smc','pure-interpreter','stepcap','negative-stepcap']:run(binary,entry,case,baseline=True)
 print('Evidence: '+str(out/'result.json'))
