@@ -918,8 +918,10 @@ class SPULifter:
                 # callee's own tail-chains so they don't grow the caller frame)
                 # + image save/restore (adopt-on-serve cannot leak upward).
                 return (f"{link} {{ int32_t _si = (int32_t)ctx->image_id; "
+                        f"uint32_t _sr = ctx->drain_ret_pc; ctx->drain_ret_pc = 0x{addr + 4:X}; "
                         f"ctx->host_depth++; {self.prefix}spu_func_{tgt:08X}(ctx); "
-                        f"spu_drain_call(ctx, 0x{addr + 4:X}); ctx->host_depth--; spu_img_restore(ctx, _si); }}")
+                        f"spu_drain_call(ctx, 0x{addr + 4:X}); ctx->host_depth--; "
+                        f"ctx->drain_ret_pc = _sr; spu_img_restore(ctx, _si); }}")
             return f"{link} /* TODO spu: brsl unresolved target */;"
         if mn in _COND_BR:
             tgt = self._branch_target(insn)
@@ -982,9 +984,10 @@ class SPULifter:
             # read the target BEFORE writing the link: rt may be the same register as ra
             return (f"{{ uint32_t _tg = {g(tgt_reg)}._u32[0]; {g(link_rt)} = spu_link(0x{(addr + 4) & 0x3FFFC:X}); "
                     f"int32_t _si = (int32_t)ctx->image_id; "
+                    f"uint32_t _sr = ctx->drain_ret_pc; ctx->drain_ret_pc = 0x{addr + 4:X}; "
                     f"{_ied}ctx->pc = _tg; ctx->host_depth++; "
                     f"spu_indirect_branch(ctx); spu_drain_call(ctx, 0x{addr + 4:X}); "
-                    f"ctx->host_depth--; spu_img_restore(ctx, _si); }}")
+                    f"ctx->host_depth--; ctx->drain_ret_pc = _sr; spu_img_restore(ctx, _si); }}")
         # bisled: set link, branch to RA only if an external event is pending.
         if mn in ("bisled",):
             link_rt = insn.raw & 0x7F            # rt = link

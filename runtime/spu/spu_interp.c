@@ -549,7 +549,7 @@ static uint32_t spu_interp_run_until_scoped_body(spu_context* ctx, uint32_t star
          * un-lifted image (e.g. a title's raw SPU jobs) must never rejoin
          * another image's functions that happen to share an LS address. */
         /* ponytail: pc-only match; a recursive call through the same site would stop early -- compare r1 too if one shows up. */
-        if (ctx->image_id >= 0 && stop_lsa && ctx->pc == stop_lsa) {
+        if (ctx->image_id >= 0 && stop_lsa && ctx->pc == (stop_lsa & SPU_LS_MASK)) {
             g_spu_interp_steps=steps; g_spu_interp_last_pc=ctx->pc; return ctx->pc;
         }
         /* Cheap empty-registry path; guards run only at explicit entry PCs.
