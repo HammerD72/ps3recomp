@@ -68,12 +68,12 @@ def run(binary,entry,case,red=False,baseline=False):
     result=subprocess.run([str(binary),str(case)],cwd=binary.parent,env=env,capture_output=True,text=True,timeout=10)
     entry['runs'].append({'case':case,'red':red,'returncode':result.returncode,'stdout':result.stdout,'stderr':result.stderr})
     (out/'result.json').write_text(json.dumps(report,indent=2))
-    if red:assert result.returncode!=0 and any(s in result.stderr for s in ['return boundary not published','interpreter passed native return boundary']),entry['runs'][-1]
+    if red:assert result.returncode!=0 and any(s in result.stderr for s in ['return boundary not published','interpreter passed native return boundary','outer return boundary not restored','return boundary queued compiled dispatch','compiled return entered while native caller owns it']),entry['runs'][-1]
     else:assert result.returncode==0 and ('PASS' if baseline else 'PASS exact call boundary') in result.stdout,entry['runs'][-1]
     print(('RED ' if red else 'PASS ')+entry['label']+' '+str(case),flush=True)
 for historical in (False,True):
     binary,entry=build(root,'historical' if historical else 'production',historical)
-    for case in range(8):run(binary,entry,case,historical)
+    for case in range(16):run(binary,entry,case,historical)
 binary,entry=build(root,'baseline',baseline=True)
 for case in ['top','top-zero','nested-return','nested-return-unlifted','nested-calls','stop-zero','nested-stop','stop-code','halt','smc','pure-interpreter','stepcap','negative-stepcap']:run(binary,entry,case,baseline=True)
 print('Evidence: '+str(out/'result.json'))
