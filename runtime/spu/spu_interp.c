@@ -507,7 +507,7 @@ uint32_t spu_interp_run(spu_context* ctx, uint32_t start_lsa) {
     return spu_interp_run_until(ctx, start_lsa, 0);
 }
 
-static uint32_t spu_interp_run_until_scoped_body(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa, uint64_t budget) {
+static uint32_t spu_interp_run_until_scoped_body(spu_context* ctx, uint32_t start_lsa, uint32_t stop_lsa, uint64_t budget, int native_call) {
     native_freeze();
     ctx->pc = start_lsa & 0x3FFFC;
     ctx->status = SPU_STATUS_RUNNING;
@@ -570,7 +570,7 @@ static uint32_t spu_interp_run_until_scoped_body(spu_context* ctx, uint32_t star
             if (used) { steps+=used; g_spu_interp_last_pc=last; continue; }
         }
         int owned_mode=spu_native_owned_policy(ctx);
-        int can_rejoin=!owned_mode || (!budget && !stop_lsa && !_tr && !_cap && !_g1 &&
+        int can_rejoin=!owned_mode || (!budget && (!stop_lsa || (native_call && ctx->host_depth>0 && stop_lsa==ctx->drain_ret_pc)) && !_tr && !_cap && !_g1 &&
             !native_instrumented && spu_native_owned_can_run(ctx,ctx->pc));
         if (can_rejoin && ctx->image_id >= 0 && spu_lifted_lookup(ctx, ctx->pc)) {
             g_spu_interp_steps=steps; g_spu_interp_last_pc=ctx->pc; return ctx->pc;
@@ -659,7 +659,19 @@ uint32_t spu_interp_run_until(spu_context* ctx, uint32_t start_lsa, uint32_t sto
 }
 uint32_t spu_interp_run_until_budget(spu_context* ctx,uint32_t start_lsa,uint32_t stop_lsa,uint64_t budget) {
     uint64_t saved=spu_sf_simd_enter();
-    uint32_t result=spu_interp_run_until_scoped_body(ctx,start_lsa,stop_lsa,budget);
+    uint32_t result=spu_interp_run_until_scoped_body(ctx,start_lsa,stop_lsa,budget,0);
+    spu_sf_simd_leave(saved);
+    return result;
+}
+
+/* A dispatcher-owned host return is distinct from an arbitrary canonical stop.
+ * Authorization is a call-local value, so nested execution/nonlocal exits
+ * cannot leak permission into another interpreter invocation. */
+uint32_t spu_interp_run_native_call(spu_context* ctx,uint32_t start,uint32_t stop) {
+    int authorized=spu_native_owned_policy(ctx) && ctx->host_depth>0 &&
+        stop && stop==ctx->drain_ret_pc;
+    uint64_t saved=spu_sf_simd_enter();
+    uint32_t result=spu_interp_run_until_scoped_body(ctx,start,stop,0,authorized);
     spu_sf_simd_leave(saved);
     return result;
 }

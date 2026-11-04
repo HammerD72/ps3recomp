@@ -233,7 +233,7 @@ int spu_native_owned_observed(void) {
 }
 void spu_native_owned_interpret(spu_context* ctx) {
     uint32_t stop=ctx->drain_ret_pc;
-    uint32_t next=spu_interp_run_until(ctx,ctx->pc,stop);
+    uint32_t next=spu_interp_run_native_call(ctx,ctx->pc,stop);
     if (!(ctx->status & (SPU_STATUS_STOPPED_BY_STOP|SPU_STATUS_STOPPED_BY_HALT)) &&
         !(stop && next==(stop & SPU_LS_MASK)) && !g_spu_trampoline_fn &&
         spu_native_owned_can_run(ctx,next))
