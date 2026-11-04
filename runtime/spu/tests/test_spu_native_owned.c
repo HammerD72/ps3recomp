@@ -10,13 +10,20 @@
  * assertions and error handling remain unchanged. */
 #define OWNED_CHECK(x) do { if (!(x)) { fprintf(stderr,"FAIL %s:%d: %s\n",__FILE__,__LINE__,#x);exit(1); } } while (0)
 static unsigned native_calls, native_in_irq;
-static int call_policy;
+static int call_policy, queued_irq;
 extern void spu_wrch(spu_context*,uint32_t,u128);
 extern u128 spu_rdch(spu_context*,uint32_t);
 static void forbidden_policy(spu_context* c) { (void)c; fputs("FORBIDDEN compiled policy\n",stderr); exit(2); }
 static void owned_job(spu_context* c) {
     ++native_calls;
     if (c->irq_saved || c->irq_frame) ++native_in_irq;
+    if (queued_irq) {
+        c->gpr[3]=spu_ai(c->gpr[3],3);c->pc=0x4004;
+        c->event_status=1;g_spu_trampoline_fn=spu_indirect_branch;
+        spu_drain_call(c,0x204);
+        OWNED_CHECK(c->pc==0x204 && !c->irq_frame && !c->irq_saved);
+        g_spu_trampoline_fn=spu_indirect_branch;return;
+    }
     if (call_policy) {
         c->gpr[4]=c->gpr[0];
         spu_context* ctx=c;
@@ -32,7 +39,15 @@ int main(int argc,char** argv) {
     _set_error_mode(_OUT_TO_STDERR);_set_abort_behavior(0,_WRITE_ABORT_MSG|_CALL_REPORTFAULT);
 #endif
     OWNED_CHECK(argc==2);const char* mode=argv[1];
-    call_policy=!strcmp(mode,"call-policy");
+    if (!strcmp(mode,"capabilities")) {
+#if defined(__clang__)
+        puts("musttail=1");
+#else
+        puts("musttail=0");
+#endif
+        return 0;
+    }
+    call_policy=!strcmp(mode,"call-policy");queued_irq=!strcmp(mode,"queued-irq");
     spu_context_init(&ctx,0);ctx.image_id=77;ctx.policy_mode=1;
     ctx.pc=0x200;ctx.status=SPU_STATUS_RUNNING;
     word(0x200,0x31080000); /* brasl r0,0x4000 */
@@ -50,8 +65,8 @@ int main(int argc,char** argv) {
     } else {
         word(0x4000,0x1C00C183);word(0x4004,0x35000000);
     }
-    if (!strcmp(mode,"irq")) {
-        ctx.int_enable=1;ctx.event_status=ctx.event_mask=1;
+    if (!strcmp(mode,"irq") || queued_irq) {
+        ctx.int_enable=1;ctx.event_mask=1;ctx.event_status=queued_irq?0:1;
         word(0,0x3000C000); /* bra 0x600 */
         word(0x600,0x4080008A); /* il r10,1 */
         word(0x604,0x21A0010A); /* wrch event-ack,r10 */
@@ -85,6 +100,7 @@ int main(int argc,char** argv) {
     spu_begin_image(77);spu_register_function(0x200,forbidden_policy);
     spu_register_function(0x204,forbidden_policy);spu_register_function(0x300,forbidden_policy);
     spu_register_function(0x4000,forbidden_policy); /* stale primary must lose */
+    spu_register_function(0x600,forbidden_policy);
     spu_begin_image(25);
     if (strcmp(mode,"owner-miss")) spu_register_function(0x4000,owned_job);
 #ifndef OWNED_HISTORICAL
@@ -120,8 +136,20 @@ int main(int argc,char** argv) {
     OWNED_CHECK(!fesetround(FE_DOWNWARD));
     OWNED_CHECK(!feraiseexcept(FE_INVALID|FE_INEXACT));
     int rounding=fegetround(), flags=fetestexcept(FE_ALL_EXCEPT);
+    if (queued_irq) {
+        OWNED_CHECK(spu_interp_run_until_budget(&reference,0x200,0,2)==0x4004);
+        OWNED_CHECK(reference.gpr[3]._u32[0]==3);
+        reference.event_status=1; /* authored external event after the same two guest instructions */
+    }
     spu_run_with_halt(forbidden_policy,&reference);
     OWNED_CHECK(fegetround()==rounding && fetestexcept(FE_ALL_EXCEPT)==flags);
+#if defined(__clang__)
+    if (!strcmp(mode,"musttail")) {
+        extern void spu_indirect_branch_mt(spu_context*);
+        ctx.pc=0x4000;ctx.gpr[0]=spu_link(0x204);
+        spu_indirect_branch_mt(&ctx);SPU_DRAIN(&ctx);
+    } else
+#endif
     spu_run_with_halt(forbidden_policy,&ctx);
     OWNED_CHECK(fegetround()==rounding && fetestexcept(FE_ALL_EXCEPT)==flags);
     OWNED_CHECK(!memcmp(ctx.gpr,reference.gpr,sizeof ctx.gpr));
@@ -129,12 +157,12 @@ int main(int argc,char** argv) {
     OWNED_CHECK(ctx.status==reference.status && ctx.stop_code==reference.stop_code);
     OWNED_CHECK(ctx.event_status==reference.event_status && ctx.event_mask==reference.event_mask);
     OWNED_CHECK(ctx.int_enable==reference.int_enable && ctx.irq_saved==reference.irq_saved);
-    if (!strcmp(mode,"irq")) {
-        OWNED_CHECK(ctx.event_status==0 && ctx.irq_saved==0 && ctx.int_enable==1 && ctx.srr0==0x200);
+    if (!strcmp(mode,"irq") || queued_irq) {
+        OWNED_CHECK(ctx.event_status==0 && ctx.irq_saved==0 && ctx.int_enable==1 && ctx.srr0==(queued_irq?0x4004u:0x200u));
         OWNED_CHECK(!ctx.irq_frame);
     }
     OWNED_CHECK(ctx.gpr[3]._u32[0]==(call_policy?12u:!strcmp(mode,"dma-invalidate")?11u:5u));
-    unsigned expected=(!strcmp(mode,"owned")||!strcmp(mode,"irq")||call_policy)?1u:0u;
+    unsigned expected=(!strcmp(mode,"owned")||!strcmp(mode,"irq")||queued_irq||!strcmp(mode,"musttail")||call_policy)?1u:0u;
     if (native_calls!=expected || native_in_irq) {
         fprintf(stderr,"FAIL native calls=%u expected=%u native_in_irq=%u\n",native_calls,expected,native_in_irq);exit(1);
     }
