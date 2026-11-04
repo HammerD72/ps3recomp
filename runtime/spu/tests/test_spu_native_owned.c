@@ -96,6 +96,9 @@ int main(int argc,char** argv) {
         OWNED_CHECK(spu_rdch(&ctx,MFC_RdTagStat)._u32[0]==(1u<<3));
         OWNED_CHECK(!memcmp(ctx.ls+0x4000,replacement,sizeof replacement));
         OWNED_CHECK(ctx.resident_code[0].image_id==0);
+        /* GET and tag completion are finished; the subsequent authored code
+         * accesses only LS. End the external fixture VM lifetime here. */
+        free(vm_base);vm_base=NULL;ppu_vm_size=0;
     }
     spu_begin_image(77);spu_register_function(0x200,forbidden_policy);
     spu_register_function(0x204,forbidden_policy);spu_register_function(0x300,forbidden_policy);
@@ -132,7 +135,9 @@ int main(int argc,char** argv) {
         puts("stop-boundary PASS");return 0;
     }
     memcpy(&reference,&ctx,sizeof ctx);reference.ls=reference.ls_store;
-    reference.image_id=-1; /* actual interpreter's existing pure-reference mode */
+    /* Remove only host code ownership; retain the policy registry namespace.
+     * Every guest instruction then runs through the real interpreter adapter. */
+    memset(reference.resident_code,0,sizeof reference.resident_code);
     OWNED_CHECK(!fesetround(FE_DOWNWARD));
     OWNED_CHECK(!feraiseexcept(FE_INVALID|FE_INEXACT));
     int rounding=fegetround(), flags=fetestexcept(FE_ALL_EXCEPT);
