@@ -5,6 +5,7 @@
  * spu_<mnemonic> helpers the lifter emits, so interpreted and lifted code are
  * bit-identical. Uncommon opcodes trap loudly (never silently wrong).
  */
+#include "spu_native_owned.h"
 #include "spu_interp.h"
 #include "spu_helpers.h"
 #include "spu_native_leaf.h"
@@ -529,6 +530,11 @@ static uint32_t spu_interp_run_until_scoped_body(spu_context* ctx, uint32_t star
         if (budget && steps>=budget) {
             g_spu_interp_steps=steps; return ctx->pc;
         }
+        /* Owned-job mode must not consume an enabled IRQ window entirely
+         * inside the policy interpreter before the drain can observe it. */
+        if (spu_native_owned_policy(ctx) && ctx->int_enable && !ctx->irq_saved &&
+            (ctx->event_status & ctx->event_mask))
+            spu_take_interrupt(ctx,NULL);
         /* Match the lifted path: only synthetic HLE tasks may bypass the
          * resident policy. Real tasksets also store 0xA70 in their API table.
          * Preserve the legacy CRI return convention while invoking the HLE. */
@@ -563,7 +569,10 @@ static uint32_t spu_interp_run_until_scoped_body(spu_context* ctx, uint32_t star
             uint64_t used=native_try(ctx,stop_lsa,(budget ? budget : UINT64_MAX)-steps,&last);
             if (used) { steps+=used; g_spu_interp_last_pc=last; continue; }
         }
-        if (ctx->image_id >= 0 && spu_lifted_lookup(ctx, ctx->pc)) {
+        int owned_mode=spu_native_owned_policy(ctx);
+        int can_rejoin=!owned_mode || (!budget && !stop_lsa && !_tr && !_cap && !_g1 &&
+            !native_instrumented && spu_native_owned_can_run(ctx,ctx->pc));
+        if (can_rejoin && ctx->image_id >= 0 && spu_lifted_lookup(ctx, ctx->pc)) {
             g_spu_interp_steps=steps; g_spu_interp_last_pc=ctx->pc; return ctx->pc;
         }
         g_spu_interp_last_pc = ctx->pc;
@@ -631,7 +640,8 @@ void spu_dispatch(spu_context* ctx, uint32_t target) {
     for (;;) {
         target &= 0x3FFFC;
         spu_lifted_fn fn = spu_lifted_lookup(ctx, target);
-        if (fn) {
+        if (fn && (!spu_native_owned_policy(ctx) ||
+                   spu_native_owned_can_run(ctx,target))) {
             ctx->pc = target;
             PS3_SPU_RESOLVED(ctx, fn);
             fn(ctx); return;
