@@ -1,0 +1,29 @@
+name: SPU load address discovery
+on:
+  push:
+    branches: [master, main, combined, 'codex/**']
+    paths: ['tools/find_spu_functions.py', 'tools/spu_lifter.py', 'tools/spu_disasm.py', 'tools/wrap_spu_elf.py', 'tools/test_spu_load_bias.py', 'runtime/spu/**', '.github/workflows/spu-load-bias.yml']
+  pull_request:
+    paths: ['tools/find_spu_functions.py', 'tools/spu_lifter.py', 'tools/spu_disasm.py', 'tools/wrap_spu_elf.py', 'tools/test_spu_load_bias.py', 'runtime/spu/**', '.github/workflows/spu-load-bias.yml']
+  workflow_dispatch:
+jobs:
+  continuations:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - run: python tools/test_spu_load_bias.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spu-load-bias-${{ matrix.os }}
+          path: temp/checks/load-bias-*/result.json
