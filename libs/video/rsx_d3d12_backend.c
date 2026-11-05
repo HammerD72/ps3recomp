@@ -2888,18 +2888,23 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
     /* A stale cache entry (slot >= 0) re-uses its own slot; otherwise take a
      * free one. Without this the stale path fell through to freeslot and either
      * duplicated the texture into a second slot or bailed when none was free. */
-    if (slot < 0 && freeslot < 0) {
+    const unsigned units=(unsigned)(sizeof(s_d3d.draws[0].tex)/sizeof(s_d3d.draws[0].tex[0]));
+    /* An unpinned entry is reusable, not empty. Retain its cached content while
+     * the byte budget and bounded metadata pool can accommodate a new entry. */
+    const int retain_candidate = retention && freeslot >= 0 &&
+        s_d3d.vp_tex[freeslot].res && s_d3d.vp_tex_bytes < texture_retention_budget() &&
+        s_d3d.vp_tex_capacity < MAX_DRAWS*units;
+    if (slot < 0 && (freeslot < 0 || retain_candidate)) {
         unsigned before=s_d3d.vp_tex_capacity,after=before;
-        unsigned units=(unsigned)(sizeof(s_d3d.draws[0].tex)/sizeof(s_d3d.draws[0].tex[0]));
         void* grown=rsx_slot_pool_grow(s_d3d.vp_tex,before,before+1,
             INITIAL_VP_TEX_SLOTS,MAX_DRAWS*units,sizeof(VPTexSlot),&after);
         if(!grown) {
-            fprintf(stderr,"[RSXTEXTURE] pinned pool cannot grow count=%u limit=%u off=%08X %ux%u fmt=%02X\n",before,MAX_DRAWS*units,off,w,h,fmt);
+            fprintf(stderr,"[RSXTEXTURE] texture pool cannot grow count=%u limit=%u off=%08X %ux%u fmt=%02X\n",before,MAX_DRAWS*units,off,w,h,fmt);
             abort();
         }
         s_d3d.vp_tex=(VPTexSlot*)grown;s_d3d.vp_tex_capacity=after;
         freeslot=(int)before;
-        fprintf(stderr,"[RSXTEXTURE] pinned pool grew %u->%u off=%08X\n",before,after,off);
+        fprintf(stderr,"[RSXTEXTURE] texture pool grew %u->%u off=%08X\n",before,after,off);
     }
     /* TEX_SRCDBG=<N>: is the guest memory this slot uploads FROM actually
      * populated? An empty source and a broken sampler both render flat. */

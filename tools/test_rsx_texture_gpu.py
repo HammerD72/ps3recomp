@@ -23,7 +23,7 @@ def main():
     header,count=re.subn(r'(?m)^(int|void) (rsx_d3d12_backend_\w+\([^;]*;)',r'static \1 \2',public_header.read_text())
     assert count==4,'Backend entry-point interface changed; review fixture linkage'
     paths=[backend,public_header,ROOT/'libs/video/rsx_d3d12_texture_residency.h',ROOT/'libs/video/rsx_texture_fingerprint.h',ROOT/'libs/video/rsx_texture_layout.c',ROOT/'libs/video/tests/rsx_d3d12_texture_gpu.c',ROOT/'libs/video/third_party/xxhash/PROVENANCE.json']
-    result={'qualification':'Actual production backend function bodies and real DX12 allocation, queue/fence, upload and readback. Four unrelated entry-point declarations become static only for fixture linkage; an unexercised relocation diagnostic boundary aborts visibly. Authored bytes. No game/FPS or shader-sampled descriptor proof. Stale-event case signals only an authored blocking gate; the real queue must complete its own target fence.', 'adapter_requested':args.adapter,'source_sha256':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths},'commands':[]}
+    result={'qualification':'Actual production backend function bodies and real DX12 allocation, queue/fence, upload and readback. Four unrelated entry-point declarations become static only for fixture linkage; an unexercised relocation diagnostic boundary aborts visibly. Authored bytes. Production SRV writer tested by actual 2D/cube shader sampling; no whole-game or throughput/FPS proof. Stale-event case signals only an authored blocking gate; the real queue must complete its own target fence.', 'adapter_requested':args.adapter,'source_sha256':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths},'commands':[]}
     env=dict(os.environ)
     for k in list(env):
         if k.startswith(('RSX_','TEX_')):env.pop(k)
@@ -38,8 +38,12 @@ def main():
         assert command(cmd,tag+'-compile').returncode==0,f'Compilation failed: {out}/result.json'
         result.setdefault('binary_sha256',{})[tag]=hashlib.sha256(exe.read_bytes()).hexdigest();return exe
     exe=build(source,'production')
-    for tag,arguments in [('full',[]),('stale-wake',['stale-wake-only'])]:
+    for tag,arguments in [('full',[]),('stale-wake',['stale-wake-only']),('descriptor',['descriptor-only'])]:
         p=command([str(exe)]+arguments,tag);assert p.returncode==0,f'{tag}: {out}/result.json';print(p.stdout.strip())
+    p=command([str(exe),'growth-only'],'growth',dict(env,RSX_TEXTURE_CACHE_MIB='2'))
+    assert p.returncode==0,f'growth: {out}/result.json';print(p.stdout.strip())
+    p=command([str(exe),'growth-only'],'reference-growth-red',dict(env,RSX_TEXTURE_RETENTION='0',RSX_TEXTURE_CACHE_MIB='2'))
+    assert p.returncode==7 and 'grown==10&&' in p.stderr,f'Expected reference growth failure: {out}/result.json';print('PASS actual reference growth RED')
     for tag,arguments,required in [('reference-red',[],'c==2&&'),('source-reference-red',['source-only'],'v[0]==src[1]'),('cube-reference-red',['cube-only'],'v[0]==src[1]')]:
         p=command([str(exe)]+arguments,tag,dict(env,RSX_TEXTURE_RETENTION='0'))
         assert p.returncode==7 and required in p.stderr,f'Expected reference contract failure: {out}/result.json';print('PASS actual reference RED:',tag)
