@@ -1,0 +1,35 @@
+name: DX12 texture lookup
+on:
+  push:
+    paths:
+      - 'libs/video/rsx_d3d12_backend.c'
+      - 'libs/video/rsx_texture_profile.h'
+      - 'tools/test_rsx_texture_retention.py'
+      - '.github/workflows/rsx-texture-retention.yml'
+  pull_request:
+    paths:
+      - 'libs/video/rsx_d3d12_backend.c'
+      - 'libs/video/rsx_texture_profile.h'
+      - 'tools/test_rsx_texture_retention.py'
+      - '.github/workflows/rsx-texture-retention.yml'
+  workflow_dispatch:
+jobs:
+  lookup:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - run: python tools/test_rsx_texture_retention.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: texture-lookup-${{ matrix.os }}
+          path: temp/checks/texture-retention-*/result.json

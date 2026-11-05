@@ -187,6 +187,8 @@ typedef struct {
                          * shift it, so keying on off never matches the raw offset
                          * a later draw arrives with, and every draw re-uploads. */
     int used;           /* referenced this frame */
+    u32 mips;           /* cube-face source stride depends on the mip chain */
+    u64 last_use;       /* render-thread use order, modulo uint64_t */
 } VPTexSlot;
 /* Distinct textures uploadable per frame. Four was enough for a UI/atlas-style
  * frame but not for a scene: this title binds ~20 distinct textures per frame,
@@ -332,6 +334,7 @@ typedef struct {
     u32                   vp_gen;               /* bumped per VP recompile       */
     int                   vp_uses_c03;          /* VS references vp_c[0..3]      */
     VPTexSlot*            vp_tex;
+    u64                   vp_tex_use_serial;
     unsigned              vp_tex_capacity; /* per-frame VP texture slots    */
     VPVSEntry             vp_vs[VP_VS_CACHE];   /* per-draw decompiled VS cache  */
     int                   vp_vs_n;
@@ -2694,6 +2697,19 @@ static void texture_profile_log(void)
     memset(&s_texture_profile, 0, sizeof(s_texture_profile));
 }
 
+/* Reference remains available while residency/lifetime validation is pending. */
+static int texture_retention_on(void)
+{
+    static int value = -1;
+    if (value < 0) {
+        const char* e = getenv("RSX_TEXTURE_RETENTION");
+        if (!e || !strcmp(e, "0")) value = 0;
+        else if (!strcmp(e, "1")) value = 1;
+        else { fprintf(stderr, "[RSXTEXTURE] invalid RSX_TEXTURE_RETENTION; use 0 or 1\n"); abort(); }
+    }
+    return value;
+}
+
 static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips, rsx_texture_profile_call* profile)
 {
     /* TEX_BUDGET=<n>: cap texture uploads per frame. Off by default -- it was
@@ -2750,12 +2766,16 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
      * here was a GCC/Clang extension MSVC rejects.) */
     #define TEX_CSUM(base, nbytes) texture_profile_csum(profile, (base), (nbytes))
     int slot = -1, freeslot = -1;
+    const int retention = texture_retention_on();
+    const u64 serial = retention ? ++s_d3d.vp_tex_use_serial : 0;
+    int empty = -1, oldest = -1;
+    u64 oldest_age = 0;
     rsx_texture_profile_lookup_begin(profile);
     for (unsigned i = 0; i < s_d3d.vp_tex_capacity; i++) {
         VPTexSlot* c = &s_d3d.vp_tex[i];
         if (c->res && c->key == key_off && c->w == w && c->h == h && c->fmt == fmt
-            && c->cube == cube) {
-            if (c->used) { rsx_texture_profile_lookup_end(profile, i + 1, RSX_TEX_FRAME_HIT); return i; }                /* already bound this frame */
+            && c->cube == cube && (!retention || c->mips == mips)) {
+            if (c->used) { if (retention) c->last_use = serial; rsx_texture_profile_lookup_end(profile, i + 1, RSX_TEX_FRAME_HIT); return i; }                /* already bound this frame */
             { static int nocache = -1;            /* TEX_NOCACHE=1: always re-upload */
               if (nocache < 0) { const char* e = getenv("TEX_NOCACHE");
                                  nocache = e ? atoi(e) : 0; }
@@ -2766,13 +2786,21 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
             u32 nb = dxt ? (blkrow * blkrows) : (w * h * bpp);
             rsx_texture_profile_lookup_end(profile, i + 1, RSX_TEX_VALIDATED_HIT);
             u32 cs = TEX_CSUM(vm_base + c->off, nb);
-            if (cs == c->csum) { c->used = 1; return i; }
+            if (cs == c->csum) { c->used = 1; if (retention) c->last_use = serial; return i; }
             if (profile) profile->outcome = RSX_TEX_STALE;
             slot = i; break;                      /* stale: fall through and redo */
         }
         if (!c->used && freeslot < 0) freeslot = i;
+        if (retention && !c->used) {
+            if (!c->res && empty < 0) empty = (int)i;
+            if (c->res) {
+                const u64 age = serial - c->last_use;
+                if (oldest < 0 || age > oldest_age) { oldest = (int)i; oldest_age = age; }
+            }
+        }
     }
     rsx_texture_profile_lookup_end(profile, s_d3d.vp_tex_capacity, RSX_TEX_MISS);
+    if (retention) freeslot = empty >= 0 ? empty : oldest;
     /* TEX_OFF_BIAS=1: sample the image one whole level-0 BELOW the bound offset.
      * Measured on the Rubber Ducky demo: at the bind offset every texture reads
      * as all-zero, while [off - w*h*bpp, off) holds the image (3800-4160 of 4298
@@ -3276,7 +3304,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
     /* Only immutable per-draw SRV windows are bound. A legacy cache SRV at
      * 1+slot aliases those windows once the cache exceeds31 entries. */
     t->off = off; t->key = key_off; t->w = w; t->h = h; t->fmt = fmt;
-    t->cube = cube; t->used = 1;
+    t->cube = cube; t->used = 1; t->mips = mips; t->last_use = serial;
     { u32 nb = dxt ? (blkrow * blkrows) : (w * h * bpp);
       t->csum = TEX_CSUM(vm_base + off, nb); }
     #undef TEX_CSUM
