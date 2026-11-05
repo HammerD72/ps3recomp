@@ -189,6 +189,7 @@ typedef struct {
     int used;           /* referenced this frame */
     u32 mips;           /* cube-face source stride depends on the mip chain */
     u64 last_use;       /* render-thread use order, modulo uint64_t */
+    u64 allocation_bytes; /* owned default + upload allocation footprints */
 } VPTexSlot;
 /* Distinct textures uploadable per frame. Four was enough for a UI/atlas-style
  * frame but not for a scene: this title binds ~20 distinct textures per frame,
@@ -335,6 +336,8 @@ typedef struct {
     int                   vp_uses_c03;          /* VS references vp_c[0..3]      */
     VPTexSlot*            vp_tex;
     u64                   vp_tex_use_serial;
+    u64                   vp_tex_bytes, vp_tex_peak_bytes, vp_tex_peak_over_budget;
+    u64                   vp_tex_allocations, vp_tex_evictions, vp_tex_resource_failures;
     unsigned              vp_tex_capacity; /* per-frame VP texture slots    */
     VPVSEntry             vp_vs[VP_VS_CACHE];   /* per-draw decompiled VS cache  */
     int                   vp_vs_n;
@@ -380,6 +383,9 @@ typedef struct {
 } D3D12State;
 
 static D3D12State s_d3d;
+static int texture_retention_on(void);
+static u64 texture_retention_budget(void);
+static u64 texture_pinned_bytes(void);
 static void gpu_submission_fail(const char *where) {
  fprintf(stderr,"[GPU-SUBMISSION] %s failed (path/capacity/budget/write); no metadata accepted\n",where);abort();
 }
@@ -1349,9 +1355,9 @@ static int vp_upload_retire(void* context)
 {
     (void)context;
     wait_for_gpu();
+    const u64 completed = s_d3d.fence->lpVtbl->GetCompletedValue(s_d3d.fence);
     return s_d3d.device->lpVtbl->GetDeviceRemovedReason(s_d3d.device) == S_OK &&
-        s_d3d.fence->lpVtbl->GetCompletedValue(s_d3d.fence) >=
-        s_d3d.fence_values[s_d3d.frame_index];
+        completed != ~(u64)0 && completed >= s_d3d.fence_values[s_d3d.frame_index];
 }
 
 #include "rsx_slot_pool.h"
@@ -2694,6 +2700,12 @@ static void texture_profile_log(void)
             (unsigned long long)p->sampled_words, p->setup*1000.0, p->lookup*1000.0,
             p->checksum*1000.0, p->remainder*1000.0, p->total*1000.0,
             (unsigned long long)p->clock_errors, s_d3d.vp_tex_capacity);
+    fprintf(stderr, "[TEXRESIDENCY] retention=%d budget_bytes=%llu live_allocation_bytes=%llu peak_allocation_bytes=%llu pinned_bytes=%llu peak_pinned_over_budget_bytes=%llu allocations_total=%llu evictions_total=%llu resource_failures_total=%llu\n",
+        texture_retention_on(), (unsigned long long)texture_retention_budget(),
+        (unsigned long long)s_d3d.vp_tex_bytes, (unsigned long long)s_d3d.vp_tex_peak_bytes,
+        (unsigned long long)texture_pinned_bytes(), (unsigned long long)s_d3d.vp_tex_peak_over_budget,
+        (unsigned long long)s_d3d.vp_tex_allocations, (unsigned long long)s_d3d.vp_tex_evictions,
+        (unsigned long long)s_d3d.vp_tex_resource_failures);
     memset(&s_texture_profile, 0, sizeof(s_texture_profile));
 }
 
@@ -2709,6 +2721,8 @@ static int texture_retention_on(void)
     }
     return value;
 }
+
+#include "rsx_d3d12_texture_residency.h"
 
 static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips, rsx_texture_profile_call* profile)
 {
@@ -2924,8 +2938,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
      * cube path copies 6 subresources and writes a 6x upload buffer -- which
      * crashes. */
     if (t->res && (t->w != w || t->h != h || t->fmt != fmt || t->cube != cube)) {
-        t->res->lpVtbl->Release(t->res); t->res = NULL;
-        if (t->up) { t->up->lpVtbl->Release(t->up); t->up = NULL; }
+        texture_slot_release(t);
     }
     if (!t->res) {
         D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -2936,28 +2949,39 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
         td.MipLevels = 1;
         td.Format = dxfmt; td.SampleDesc.Count = 1;
         td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(
+        HRESULT hr = s_d3d.device->lpVtbl->CreateCommittedResource(
                 s_d3d.device, &hp, D3D12_HEAP_FLAG_NONE, &td,
                 D3D12_RESOURCE_STATE_COPY_DEST, NULL,
-                &IID_ID3D12Resource, (void**)&t->res)))
-            return -1;
+                &IID_ID3D12Resource, (void**)&t->res);
+        if (FAILED(hr) || !t->res) texture_resource_fail(t, "default allocation", hr);
         D3D12_HEAP_PROPERTIES hu = {0}; hu.Type = D3D12_HEAP_TYPE_UPLOAD;
         D3D12_RESOURCE_DESC bd = {0};
         bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
         bd.Width = (u64)pitch * (dxt ? blkrows : h) * (cube ? 6 : 1);
         bd.Height = 1; bd.DepthOrArraySize = 1;
         bd.MipLevels = 1; bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        if (FAILED(s_d3d.device->lpVtbl->CreateCommittedResource(
+        hr = s_d3d.device->lpVtbl->CreateCommittedResource(
                 s_d3d.device, &hu, D3D12_HEAP_FLAG_NONE, &bd,
                 D3D12_RESOURCE_STATE_GENERIC_READ, NULL,
-                &IID_ID3D12Resource, (void**)&t->up))) {
-            t->res->lpVtbl->Release(t->res); t->res = NULL; return -1;
-        }
+                &IID_ID3D12Resource, (void**)&t->up);
+        if (FAILED(hr) || !t->up) texture_resource_fail(t, "upload allocation", hr);
+        D3D12_RESOURCE_ALLOCATION_INFO gpu, upload;
+        s_d3d.device->lpVtbl->GetResourceAllocationInfo(s_d3d.device, &gpu, 0, 1, &td);
+        s_d3d.device->lpVtbl->GetResourceAllocationInfo(s_d3d.device, &upload, 0, 1, &bd);
+        if (!gpu.SizeInBytes || !upload.SizeInBytes || gpu.SizeInBytes == ~(u64)0 ||
+            upload.SizeInBytes == ~(u64)0 || gpu.SizeInBytes > ~(u64)0 - upload.SizeInBytes ||
+            s_d3d.vp_tex_bytes > ~(u64)0 - gpu.SizeInBytes - upload.SizeInBytes)
+            texture_resource_fail(t, "allocation footprint", E_FAIL);
+        t->allocation_bytes = gpu.SizeInBytes + upload.SizeInBytes;
+        s_d3d.vp_tex_bytes += t->allocation_bytes;
+        if (s_d3d.vp_tex_bytes > s_d3d.vp_tex_peak_bytes) s_d3d.vp_tex_peak_bytes = s_d3d.vp_tex_bytes;
+        ++s_d3d.vp_tex_allocations;
         fresh = 1;
     }
 
     void* mapped = NULL; D3D12_RANGE nr = {0,0};
-    if (FAILED(t->up->lpVtbl->Map(t->up, 0, &nr, &mapped)) || !mapped) return -1;
+    HRESULT map_hr = t->up->lpVtbl->Map(t->up, 0, &nr, &mapped);
+    if (FAILED(map_hr) || !mapped) texture_resource_fail(t, "upload map", map_hr);
     { static int _tp=0; if (getenv("RTT_DUMP") && _tp++ < 6) {
         const u8* sp = vm_base + off;
         fprintf(stderr, "[TEXUP] off=0x%X fmt=0x%X row0:", off, fmt);
@@ -3305,6 +3329,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
      * 1+slot aliases those windows once the cache exceeds31 entries. */
     t->off = off; t->key = key_off; t->w = w; t->h = h; t->fmt = fmt;
     t->cube = cube; t->used = 1; t->mips = mips; t->last_use = serial;
+    if (retention) texture_retention_trim();
     { u32 nb = dxt ? (blkrow * blkrows) : (w * h * bpp);
       t->csum = TEX_CSUM(vm_base + off, nb); }
     #undef TEX_CSUM
@@ -4157,6 +4182,7 @@ static void render_frame(void)
      * polygons). These workloads are a few draws/frame, so full serialisation
      * costs little. */
     address_retire();
+    texture_retention_begin_batch();
 
     /* Compile the real vertex program once its microcode is captured, and keep
      * the constant bank uploaded for the VS. */
@@ -4437,7 +4463,7 @@ static void render_frame(void)
      * A texture whose offset matches an offscreen RT samples the RT directly
      * (tex_slot 1000+idx) -- no guest-memory upload. */
     double _pre0 = perf_on() ? perf_now() : 0.0;
-    for (unsigned _i = 0; _i < s_d3d.vp_tex_capacity; _i++) s_d3d.vp_tex[_i].used = 0;
+    /* Texture pins were cleared after checked batch retirement above. */
     int shader_prefetch_pass=shader_pool_on();
     if(shader_prefetch_pass){
         shader_prefetch_generation++;rsx_prefetch_begin(&s_shader_seen);
@@ -7129,6 +7155,7 @@ void rsx_d3d12_backend_shutdown(void)
     cpu_surface_shutdown();
 
     address_retire();
+    texture_retention_begin_batch();
     for(int i=0;i<s_d3d.vp_vs_n;i++){
         shader_forget_vs_source(s_d3d.vp_vs[i].disk_source);s_d3d.vp_vs[i].disk_source=NULL;
     }
@@ -7145,8 +7172,7 @@ void rsx_d3d12_backend_shutdown(void)
     s_d3d.vp_fp = NULL;
     for(unsigned i=0;i<s_d3d.vp_tex_capacity;i++) {
         VPTexSlot* t=&s_d3d.vp_tex[i];
-        if(t->res)t->res->lpVtbl->Release(t->res);
-        if(t->up)t->up->lpVtbl->Release(t->up);
+        texture_slot_release(t);
     }
     free(s_d3d.vp_tex);s_d3d.vp_tex=NULL;s_d3d.vp_tex_capacity=0;
 

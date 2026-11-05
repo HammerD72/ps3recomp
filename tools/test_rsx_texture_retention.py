@@ -8,8 +8,11 @@ def fixture(source):
     b=source.index('/* TEX_OFF_BIAS',a)
     helper=''
     if 'static int texture_retention_on(void)' in source:
-        start=source.index('static int texture_retention_on(void)')
-        helper=source[start:source.index('static int vp_upload_tex_slot_impl',start)]
+        start=source.index('static int texture_retention_on(void)\n{')
+        end=source.index('{',start);depth=1;end+=1
+        while depth:
+            depth+=(source[end]=='{')-(source[end]=='}');end+=1
+        helper=source[start:end]
     return r"""
 #include <stdint.h>
 #include <stdio.h>

@@ -1,15 +1,23 @@
-name: DX12 texture lookup
+name: DX12 texture cache policy
 on:
   push:
     paths:
       - 'libs/video/rsx_d3d12_backend.c'
       - 'libs/video/rsx_texture_profile.h'
+      - 'libs/video/rsx_d3d12_texture_residency.h'
+      - 'libs/video/rsx_gpu_references.h'
+      - 'libs/video/rsx_address_tables.h'
+      - 'tools/test_rsx_texture_budget.py'
       - 'tools/test_rsx_texture_retention.py'
       - '.github/workflows/rsx-texture-retention.yml'
   pull_request:
     paths:
       - 'libs/video/rsx_d3d12_backend.c'
       - 'libs/video/rsx_texture_profile.h'
+      - 'libs/video/rsx_d3d12_texture_residency.h'
+      - 'libs/video/rsx_gpu_references.h'
+      - 'libs/video/rsx_address_tables.h'
+      - 'tools/test_rsx_texture_budget.py'
       - 'tools/test_rsx_texture_retention.py'
       - '.github/workflows/rsx-texture-retention.yml'
   workflow_dispatch:
@@ -28,8 +36,11 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
       - run: python tools/test_rsx_texture_retention.py
+      - run: python tools/test_rsx_texture_budget.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: texture-lookup-${{ matrix.os }}
-          path: temp/checks/texture-retention-*/result.json
+          path: |
+            temp/checks/texture-retention-*/result.json
+            temp/checks/texture-budget-*/result.json
