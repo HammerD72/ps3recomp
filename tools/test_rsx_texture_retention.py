@@ -20,7 +20,7 @@ def fixture(source):
 #include <string.h>
 #include "rsx_texture_profile.h"
 typedef uint32_t u32; typedef uint64_t u64; typedef uint8_t u8;
-typedef struct {void*res;u32 off,key,w,h,fmt,csum,mips;int cube,used;u64 last_use;} VPTexSlot;
+typedef struct {void*res;u32 off,key,w,h,fmt,mips;u64 csum;int cube,used;u64 last_use;} VPTexSlot;
 static struct {VPTexSlot vp_tex[3];unsigned vp_tex_capacity;u64 vp_tex_use_serial;} s_d3d;
 static u8 bytes[1024],*vm_base=bytes;
 #define TEX_CSUM(base,size) ((u32)*(base))

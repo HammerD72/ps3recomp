@@ -36,7 +36,7 @@ static HRESULT removed_reason(Device*d){(void)d;return removed;}
 static u64 completion(Fence*f){(void)f;return completed;}
 static DeviceOps device_ops={removed_reason};static FenceOps fence_ops={completion};
 static Device device={&device_ops};static Fence fence={&fence_ops};
-static int retired,allow_retire=1,resource_releases,pso_releases,retire_calls;
+static int retired,allow_retire=1,resource_releases,pso_releases,retire_calls,wait_ok=1;
 typedef struct Resource Resource;
 typedef struct {unsigned(*Release)(Resource*);} ResourceOps;
 struct Resource {ResourceOps*lpVtbl;};
@@ -49,7 +49,7 @@ static int texture_retention_on(void){return 1;}
 static rsx_gpu_references refs;
 static void retain(void*c,void*p){(void)c;(void)p;}
 static void release_pso(void*c,void*p){(void)c;(void)p;++pso_releases;fprintf(stderr,"PSO RELEASE\n");}
-static void wait_for_gpu(void){++retire_calls;}
+static int wait_for_gpu(void){++retire_calls;return wait_ok;}
 """+function(backend,'vp_upload_retire','int')+r"""
 static int retire(void*c){int ok=vp_upload_retire(c);if(ok)retired=1;return ok;}
 static const rsx_gpu_reference_ops ops={NULL,retain,release_pso,retire};
@@ -78,6 +78,7 @@ int main(int argc,char**argv){
         completed=0;address_retire();texture_retention_begin_batch();return 4;
     }
     CHECK(texture_retention_budget()==1024*1024);
+    wait_ok=0;CHECK(!gpu_pso_retire()&&refs.count==1&&!pso_releases);wait_ok=1;
     removed=-1;CHECK(!gpu_pso_retire()&&refs.count==1&&!pso_releases);
     removed=0;completed=UINT64_MAX;CHECK(!gpu_pso_retire()&&refs.count==1&&!pso_releases);
     completed=0;CHECK(!gpu_pso_retire()&&refs.count==1&&!pso_releases);

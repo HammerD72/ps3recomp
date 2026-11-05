@@ -9,6 +9,12 @@ on:
       - 'libs/video/rsx_address_tables.h'
       - 'tools/test_rsx_texture_budget.py'
       - 'tools/test_rsx_texture_retention.py'
+      - 'tools/test_rsx_texture_fingerprint.py'
+      - 'tools/test_rsx_texture_gpu.py'
+      - 'libs/video/rsx_texture_fingerprint.h'
+      - 'libs/video/rsx_texture_layout.c'
+      - 'libs/video/tests/rsx_d3d12_texture_gpu.c'
+      - 'libs/video/third_party/xxhash/**'
       - '.github/workflows/rsx-texture-retention.yml'
   pull_request:
     paths:
@@ -19,8 +25,19 @@ on:
       - 'libs/video/rsx_address_tables.h'
       - 'tools/test_rsx_texture_budget.py'
       - 'tools/test_rsx_texture_retention.py'
+      - 'tools/test_rsx_texture_fingerprint.py'
+      - 'tools/test_rsx_texture_gpu.py'
+      - 'libs/video/rsx_texture_fingerprint.h'
+      - 'libs/video/rsx_texture_layout.c'
+      - 'libs/video/tests/rsx_d3d12_texture_gpu.c'
+      - 'libs/video/third_party/xxhash/**'
       - '.github/workflows/rsx-texture-retention.yml'
   workflow_dispatch:
+    inputs:
+      run_gpu:
+        description: Run real headless DX12 allocation/fence/readback checks on WARP
+        type: boolean
+        default: false
 jobs:
   lookup:
     strategy:
@@ -37,6 +54,7 @@ jobs:
         if: runner.os == 'Windows'
       - run: python tools/test_rsx_texture_retention.py
       - run: python tools/test_rsx_texture_budget.py
+      - run: python tools/test_rsx_texture_fingerprint.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -44,3 +62,20 @@ jobs:
           path: |
             temp/checks/texture-retention-*/result.json
             temp/checks/texture-budget-*/result.json
+            temp/checks/texture-fingerprint-*/result.json
+
+  gpu:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_gpu
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+      - run: python tools/test_rsx_texture_gpu.py --adapter warp
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: texture-gpu-warp
+          path: temp/checks/texture-gpu-*/result.json

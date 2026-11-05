@@ -180,7 +180,7 @@ typedef struct {
     ID3D12Resource* res;
     ID3D12Resource* up;
     u32 off, w, h, fmt; /* current contents (resource reused when dims match) */
-    u32 csum;           /* sparse checksum of the source bytes last uploaded */
+    u64 csum;           /* sparse checksum of the source bytes last uploaded */
     int cube;           /* resource is a 6-face cube, sampled as TextureCube */
     u32 key;            /* the ORIGINAL bound offset -- the cache lookup key.
                          * off is the RESOLVED source after TEX_OFF_BIAS/TEX_REMAP
@@ -1291,37 +1291,35 @@ static int init_d3d12(u32 width, u32 height)
  * Frame sync helpers
  * -----------------------------------------------------------------------*/
 
-static void wait_for_gpu(void)
+static int wait_for_gpu(void)
 {
-    u32 fi = s_d3d.frame_index;
-    s_d3d.fence_values[fi]++;
-    s_d3d.cmd_queue->lpVtbl->Signal(s_d3d.cmd_queue, s_d3d.fence, s_d3d.fence_values[fi]);
-
-    if (s_d3d.fence->lpVtbl->GetCompletedValue(s_d3d.fence) < s_d3d.fence_values[fi]) {
-        s_d3d.fence->lpVtbl->SetEventOnCompletion(
-            s_d3d.fence, s_d3d.fence_values[fi], s_d3d.fence_event);
-        /* NEVER wait unbounded here: this runs on the vblank ticker, which also
-         * drives the guest's vblank handlers, the FIFO drain, and the fence
-         * publication. A device removal (TDR) leaves the D3D12 fence unsignaled
-         * forever and an INFINITE wait silently froze the ENTIRE emulation --
-         * observed on LBP as a boot that died the moment the 2048x2048
-         * offscreen RT was created (last log line), every guest thread parked.
-         * Degrade loudly instead: bounded waits + the removal reason, then
-         * carry on (subsequent D3D calls fail visibly but the game keeps
-         * running headless). */
-        for (int tries = 0; tries < 3; tries++) {
-            if (WaitForSingleObject(s_d3d.fence_event, 2000) != WAIT_TIMEOUT)
-                return;
-            HRESULT rr = s_d3d.device->lpVtbl->GetDeviceRemovedReason(s_d3d.device);
-            printf("[D3D12] wait_for_gpu STUCK %ds: want %llu got %llu removed=0x%08lX\n",
-                   2 * (tries + 1),
-                   (unsigned long long)s_d3d.fence_values[fi],
-                   (unsigned long long)s_d3d.fence->lpVtbl->GetCompletedValue(s_d3d.fence),
-                   (long)rr);
-            fflush(stdout);
-            if (rr != 0 /* S_OK: device still alive, keep waiting a bit */)
-                break;
+    const u32 fi = s_d3d.frame_index;
+    const u64 target = ++s_d3d.fence_values[fi];
+    HRESULT hr = s_d3d.cmd_queue->lpVtbl->Signal(s_d3d.cmd_queue,s_d3d.fence,target);
+    if (FAILED(hr)) { fprintf(stderr,"[D3D12] Fence Signal failed: 0x%08lX\n",(unsigned long)hr);return 0; }
+    u64 completed = s_d3d.fence->lpVtbl->GetCompletedValue(s_d3d.fence);
+    if (completed != ~(u64)0 && completed >= target) return 1;
+    hr = s_d3d.fence->lpVtbl->SetEventOnCompletion(s_d3d.fence,target,s_d3d.fence_event);
+    if (FAILED(hr)) { fprintf(stderr,"[D3D12] Fence event registration failed: 0x%08lX\n",(unsigned long)hr);return 0; }
+    const ULONGLONG start = GetTickCount64();
+    for (;;) {
+        completed = s_d3d.fence->lpVtbl->GetCompletedValue(s_d3d.fence);
+        HRESULT removed = s_d3d.device->lpVtbl->GetDeviceRemovedReason(s_d3d.device);
+        if (completed == ~(u64)0 || FAILED(removed)) {
+            fprintf(stderr,"[D3D12] Fence retirement device failure: 0x%08lX\n",(unsigned long)removed);return 0;
         }
+        if (completed >= target) return 1;
+        const ULONGLONG elapsed = GetTickCount64()-start;
+        if (elapsed >= 6000) return 0;
+        const DWORD remaining = (DWORD)(6000-elapsed);
+        DWORD status = WaitForSingleObject(s_d3d.fence_event,remaining < 2000 ? remaining : 2000);
+        if (status == WAIT_FAILED) { fprintf(stderr,"[D3D12] Fence wait failed: %lu\n",GetLastError());return 0; }
+        if (status == WAIT_TIMEOUT) {
+            fprintf(stderr,"[D3D12] Fence wait pending: target=%llu completed=%llu elapsed=%llums\n",
+                    (unsigned long long)target,(unsigned long long)completed,GetTickCount64()-start);
+        }
+        /* An old registration can wake this event. Only the real fence value
+         * admits retirement; a notification never resets the bounded deadline. */
     }
 }
 
@@ -1354,7 +1352,7 @@ static int vp_upload_allocate(void* context, uint64_t bytes, rsx_upload_buffer* 
 static int vp_upload_retire(void* context)
 {
     (void)context;
-    wait_for_gpu();
+    if (!wait_for_gpu()) return 0;
     const u64 completed = s_d3d.fence->lpVtbl->GetCompletedValue(s_d3d.fence);
     return s_d3d.device->lpVtbl->GetDeviceRemovedReason(s_d3d.device) == S_OK &&
         completed != ~(u64)0 && completed >= s_d3d.fence_values[s_d3d.frame_index];
@@ -2723,6 +2721,28 @@ static int texture_retention_on(void)
 }
 
 #include "rsx_d3d12_texture_residency.h"
+#include "rsx_texture_fingerprint.h"
+
+static u64 texture_source_csum(rsx_texture_profile_call* profile, const u8* source,
+        u32 reference_bytes, u32 w, u32 h, u32 format, int cube, u32 mips)
+{
+    extern u8* vm_base;
+    if (!texture_retention_on()) return texture_profile_csum(profile,source,reference_bytes);
+    const u64 offset = (u64)(source - vm_base);
+    rsx_texture_source_view view;
+    if (offset >= (UINT64_C(1)<<32) || !rsx_texture_source_view_init(w,h,format,cube,mips,
+                (UINT64_C(1)<<32)-offset,&view)) {
+        fprintf(stderr,"[RSXTEXTURE] invalid source span off=%llu w=%u h=%u fmt=%u cube=%d mips=%u\n",
+                (unsigned long long)offset,w,h,format,cube,mips);
+        abort();
+    }
+    rsx_texture_profile_checksum_begin(profile,0);
+    u64 value = rsx_texture_source_fingerprint(source,&view);
+    if (profile && profile->clock) profile->sampled_words += (view.hashed_bytes+3)/4;
+    rsx_texture_profile_checksum_end(profile);
+    return value;
+}
+
 
 static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32 mips, rsx_texture_profile_call* profile)
 {
@@ -2778,7 +2798,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
      * animated surface changing, cheap enough to run on every bind. */
     /* (portable helper tex_csum() -- see above; a statement-expression macro
      * here was a GCC/Clang extension MSVC rejects.) */
-    #define TEX_CSUM(base, nbytes) texture_profile_csum(profile, (base), (nbytes))
+    #define TEX_CSUM(base, nbytes) texture_source_csum(profile, (base), (nbytes), w, h, fmt, cube, mips)
     int slot = -1, freeslot = -1;
     const int retention = texture_retention_on();
     const u64 serial = retention ? ++s_d3d.vp_tex_use_serial : 0;
@@ -2799,7 +2819,7 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
              * every one of them every frame was ~70% of the frame's CPU time. */
             u32 nb = dxt ? (blkrow * blkrows) : (w * h * bpp);
             rsx_texture_profile_lookup_end(profile, i + 1, RSX_TEX_VALIDATED_HIT);
-            u32 cs = TEX_CSUM(vm_base + c->off, nb);
+            u64 cs = TEX_CSUM(vm_base + c->off, nb);
             if (cs == c->csum) { c->used = 1; if (retention) c->last_use = serial; return i; }
             if (profile) profile->outcome = RSX_TEX_STALE;
             slot = i; break;                      /* stale: fall through and redo */
@@ -3006,17 +3026,12 @@ static int vp_upload_tex_slot_impl(u32 off, u32 w, u32 h, u32 fmt, int cube, u32
      * aligned) in. Assuming mip-0-sized strides made face 1 land inside face 0's
      * mip chain -- which is exactly what the dumps showed, every face after the
      * first a progressively smaller copy of the first. */
-    u32 _face_bytes = dxt ? (blkrow * blkrows) : (w * h * bpp);
-    if (cube) {
-        u32 total = 0;
-        for (u32 lw = w, lh = h, l = 0; l < (mips ? mips : 1u); l++) {
-            total += dxt ? (((lw + 3) / 4) * (bpp == 8 ? 16u : 8u) * ((lh + 3) / 4))
-                         : (lw * lh * bpp);
-            if (lw > 1) lw >>= 1;
-            if (lh > 1) lh >>= 1;
-        }
-        _face_bytes = (total + 127u) & ~127u;
+    rsx_texture_source_view upload_view;
+    if (!rsx_texture_source_view_init(w,h,fmt,cube,mips,
+                (UINT64_C(1)<<32)-off,&upload_view)) {
+        fprintf(stderr,"[RSXTEXTURE] invalid upload source span\n");abort();
     }
+    const u32 _face_bytes = (u32)upload_view.face_stride;
     const u32 _nfaces     = cube ? 6u : 1u;
     const u32 _off0 = off; u8* const _map0 = (u8*)mapped;
     for (u32 _f = 0; _f < _nfaces; _f++) {
