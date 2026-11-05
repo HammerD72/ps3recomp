@@ -602,16 +602,21 @@ static int init_d3d12(u32 width, u32 height)
     rdoc_init();
     rsx_gpu_fault_enable();
 
-    /* Enable debug layer in debug builds */
-    /* Debug layer: on in debug builds, or in any build when D3D12_DBG is set
-     * (so a Release run can capture exact PSO/validation errors). */
-    if (
+    /* Keep assertion policy independent of optional API validation. An explicit
+     * D3D12_DBG=0 disables the layer in either build; unset retains the build
+     * default. Device/queue/resource errors remain checked normally. */
+    int debug_layer;
+    {
+        const char* e = getenv("D3D12_DBG");
 #ifdef NDEBUG
-        getenv("D3D12_DBG")
+        debug_layer = e && strcmp(e, "0") != 0;
 #else
-        1
+        debug_layer = !(e && strcmp(e, "0") == 0);
 #endif
-    ) {
+    }
+    printf("[D3D12] Debug layer %s (D3D12_DBG=%s)\n",
+           debug_layer ? "requested" : "off", getenv("D3D12_DBG") ? getenv("D3D12_DBG") : "unset");
+    if (debug_layer) {
         ID3D12Debug* debug_controller = NULL;
         hr = D3D12GetDebugInterface(&IID_ID3D12Debug, (void**)&debug_controller);
         if (SUCCEEDED(hr) && debug_controller) {
