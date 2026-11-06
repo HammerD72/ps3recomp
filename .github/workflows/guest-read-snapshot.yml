@@ -7,6 +7,9 @@ on:
       - 'runtime/memory/guest_read_sync.c'
       - 'runtime/memory/tests/guest_read_snapshot.cpp'
       - 'tools/test_guest_read_snapshot.py'
+      - 'tools/test_fifo_snapshot_boundary.py'
+      - 'libs/video/cellGcmSys.c'
+      - 'libs/video/rsx_fifo_boundary.h'
       - '.github/workflows/guest-read-snapshot.yml'
   pull_request:
     paths:
@@ -14,6 +17,9 @@ on:
       - 'runtime/memory/guest_read_sync.c'
       - 'runtime/memory/tests/guest_read_snapshot.cpp'
       - 'tools/test_guest_read_snapshot.py'
+      - 'tools/test_fifo_snapshot_boundary.py'
+      - 'libs/video/cellGcmSys.c'
+      - 'libs/video/rsx_fifo_boundary.h'
       - '.github/workflows/guest-read-snapshot.yml'
 jobs:
   dispatch:
@@ -30,8 +36,11 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
       - run: python tools/test_guest_read_snapshot.py
+      - run: python tools/test_fifo_snapshot_boundary.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: snapshot-dispatch-${{ matrix.os }}
-          path: temp/checks/guest-snapshot-*/result.json
+          path: |
+            temp/checks/guest-snapshot-*/result.json
+            temp/checks/fifo-boundary-*/result.json
