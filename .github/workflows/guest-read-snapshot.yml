@@ -10,6 +10,10 @@ on:
       - 'tools/test_fifo_snapshot_boundary.py'
       - 'libs/video/cellGcmSys.c'
       - 'libs/video/rsx_fifo_boundary.h'
+      - 'libs/video/rsx_cpu_surface.inc'
+      - 'libs/video/tests/rsx_surface_fence_cpu.c'
+      - 'libs/video/tests/rsx_surface_fence_gpu.c'
+      - 'tools/test_rsx_surface_fence.py'
       - '.github/workflows/guest-read-snapshot.yml'
   pull_request:
     paths:
@@ -20,6 +24,10 @@ on:
       - 'tools/test_fifo_snapshot_boundary.py'
       - 'libs/video/cellGcmSys.c'
       - 'libs/video/rsx_fifo_boundary.h'
+      - 'libs/video/rsx_cpu_surface.inc'
+      - 'libs/video/tests/rsx_surface_fence_cpu.c'
+      - 'libs/video/tests/rsx_surface_fence_gpu.c'
+      - 'tools/test_rsx_surface_fence.py'
       - '.github/workflows/guest-read-snapshot.yml'
 jobs:
   dispatch:
@@ -37,6 +45,7 @@ jobs:
         if: runner.os == 'Windows'
       - run: python tools/test_guest_read_snapshot.py
       - run: python tools/test_fifo_snapshot_boundary.py
+      - run: python tools/test_rsx_surface_fence.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -44,3 +53,4 @@ jobs:
           path: |
             temp/checks/guest-snapshot-*/result.json
             temp/checks/fifo-boundary-*/result.json
+            temp/checks/surface-fence-*/result.json
