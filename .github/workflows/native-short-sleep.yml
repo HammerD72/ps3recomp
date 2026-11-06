@@ -1,0 +1,40 @@
+name: Native short sleep
+on:
+  push:
+    paths:
+      - 'runtime/platform/native_short_sleep.*'
+      - 'runtime/platform/tests/*short_sleep*'
+      - 'runtime/syscalls/sys_timer.c'
+      - 'tools/test_native_short_sleep.py'
+      - '.github/workflows/native-short-sleep.yml'
+  pull_request:
+    paths:
+      - 'runtime/platform/native_short_sleep.*'
+      - 'runtime/platform/tests/*short_sleep*'
+      - 'runtime/syscalls/sys_timer.c'
+      - 'tools/test_native_short_sleep.py'
+      - '.github/workflows/native-short-sleep.yml'
+  workflow_dispatch:
+jobs:
+  waits:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - run: python tools/test_native_short_sleep.py
+        if: runner.os != 'Windows'
+      - run: python tools/test_native_short_sleep.py --real
+        if: runner.os == 'Windows'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: short-sleep-${{ matrix.os }}
+          path: temp/checks/native-short-sleep-*/result.json

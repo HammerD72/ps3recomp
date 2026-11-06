@@ -6,6 +6,7 @@
 #define _DEFAULT_SOURCE /* tm_gmtoff on glibc */
 #endif
 #include "sys_timer.h"
+#include "../platform/native_short_sleep.h"
 #include <time.h>
 #include "sys_event.h"
 #include "../memory/vm.h"
@@ -218,7 +219,9 @@ int64_t sys_timer_usleep(ppu_context* ctx)
 
 #ifdef _WIN32
     /* Use high-resolution sleep via waitable timer for better precision */
-    if (usec >= 1000) {
+    if (usec > 0 && usec < 1000 && ps3_native_short_sleep(usec)) {
+        /* The checked monotonic deadline has passed in a blocking wait. */
+    } else if (usec >= 1000) {
         HANDLE timer = CreateWaitableTimerW(NULL, TRUE, NULL);
         if (timer) {
             LARGE_INTEGER due;
