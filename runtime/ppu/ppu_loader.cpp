@@ -36,6 +36,7 @@
 #include "ppu_tls.h"   /* PPU_THREAD_LOCAL, without a second ppu_context */
 #define PPU_NO_INLINE_LOADS   /* this file defines the out-of-line accessors */
 #include "ppu_recomp.h"
+#include "ps3emu/ppu_function_registry.h"
 #include "ps3emu/milestone.h"   /* ps3_ms / ps3_msf -- boot milestone log */     /* ppu_context, func decls, ppu_recomp_register */
 #include "../memory/vm.h"   /* vm_commit -- sys_mmapper_search_and_map maps for real */
 #include "../platform/win32_compat.h"      /* Win32 types, interlocked ops, Sleep/QPC on POSIX */
@@ -2047,7 +2048,7 @@ extern "C" uint32_t ppu_active_lr(void)
  * a free slot and spins forever at startup. 2^18 = 262144 slots keeps a 68k
  * image at ~26% load with headroom to ~190k functions at 75%.
  * -----------------------------------------------------------------------*/
-typedef void (*ppu_fn)(ppu_context*);
+typedef ps3emu_ppu_function ppu_fn;
 
 /* 2^18 = 262144 slots. MUST exceed the lifted function count or the open-addressing
  * insertion loop below spins forever (the re-lifted flОw has 104,415 functions; a
@@ -2114,6 +2115,15 @@ static ppu_fn ppu_lookup(uint32_t a)
         i = (i + 1) & PPU_HASH_MASK;
     }
     return nullptr;
+}
+
+extern "C" int ppu_get_registered_function(uint32_t a, ppu_fn* out)
+{
+    if (out == nullptr) return 0;
+    ppu_fn fn = ppu_lookup(a);
+    if (fn == nullptr) return 0;
+    *out = fn;
+    return 1;
 }
 
 extern "C" uint32_t ppu_function_count(void) { return g_fn_count; }
