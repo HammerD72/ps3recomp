@@ -1,0 +1,79 @@
+name: Guest read snapshot dispatch
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'include/ps3emu/guest_read_sync.h'
+      - 'runtime/memory/guest_read_sync.c'
+      - 'runtime/memory/tests/guest_read_snapshot.cpp'
+      - 'tools/test_guest_read_snapshot.py'
+      - 'tools/test_fifo_snapshot_boundary.py'
+      - 'libs/video/cellGcmSys.c'
+      - 'libs/video/rsx_fifo_boundary.h'
+      - 'libs/video/rsx_cpu_surface.inc'
+      - 'libs/video/rsx_cpu_surface_snapshot.h'
+      - 'libs/video/tests/rsx_cpu_surface_snapshot.c'
+      - 'tools/test_rsx_cpu_surface_snapshot.py'
+      - 'tools/test_rsx_snapshot_preflight.py'
+      - 'tools/test_rsx_snapshot_gpu.py'
+      - 'libs/video/tests/rsx_snapshot_gpu.c'
+      - 'libs/video/rsx_surface_readback.h'
+      - 'libs/video/rsx_d3d12_fault.h'
+      - 'libs/video/tests/rsx_surface_fence_cpu.c'
+      - 'libs/video/tests/rsx_surface_fence_gpu.c'
+      - 'tools/test_rsx_surface_fence.py'
+      - '.github/workflows/guest-read-snapshot.yml'
+  pull_request:
+    paths:
+      - 'include/ps3emu/guest_read_sync.h'
+      - 'runtime/memory/guest_read_sync.c'
+      - 'runtime/memory/tests/guest_read_snapshot.cpp'
+      - 'tools/test_guest_read_snapshot.py'
+      - 'tools/test_fifo_snapshot_boundary.py'
+      - 'libs/video/cellGcmSys.c'
+      - 'libs/video/rsx_fifo_boundary.h'
+      - 'libs/video/rsx_cpu_surface.inc'
+      - 'libs/video/rsx_cpu_surface_snapshot.h'
+      - 'libs/video/tests/rsx_cpu_surface_snapshot.c'
+      - 'tools/test_rsx_cpu_surface_snapshot.py'
+      - 'tools/test_rsx_snapshot_preflight.py'
+      - 'tools/test_rsx_snapshot_gpu.py'
+      - 'libs/video/tests/rsx_snapshot_gpu.c'
+      - 'libs/video/rsx_surface_readback.h'
+      - 'libs/video/rsx_d3d12_fault.h'
+      - 'libs/video/tests/rsx_surface_fence_cpu.c'
+      - 'libs/video/tests/rsx_surface_fence_gpu.c'
+      - 'tools/test_rsx_surface_fence.py'
+      - '.github/workflows/guest-read-snapshot.yml'
+jobs:
+  dispatch:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - run: python tools/test_guest_read_snapshot.py
+      - run: python tools/test_fifo_snapshot_boundary.py
+      - run: python tools/test_rsx_cpu_surface_snapshot.py
+      - run: python tools/test_rsx_snapshot_preflight.py
+      - run: python tools/test_rsx_snapshot_gpu.py --warp
+        if: runner.os == 'Windows'
+      - run: python tools/test_rsx_surface_fence.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: snapshot-dispatch-${{ matrix.os }}
+          path: |
+            temp/checks/guest-snapshot-*/result.json
+            temp/checks/fifo-boundary-*/result.json
+            temp/checks/cpu-surface-snapshot-*/result.json
+            temp/checks/snapshot-preflight-*/result.json
+            temp/checks/snapshot-gpu-*/result.json
+            temp/checks/surface-fence-*/result.json

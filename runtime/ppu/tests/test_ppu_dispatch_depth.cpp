@@ -17,6 +17,7 @@
 #  define _DARWIN_C_SOURCE
 #endif
 #include "ppu_recomp.h"
+#include "ps3emu/ppu_function_registry.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -42,7 +43,6 @@ void (*g_ppu_thread_entry_trampoline)(uint32_t, uint64_t, uint32_t, uint64_t);
 const func_entry function_table[1] = {{0, nullptr, nullptr}};   // no lifted program: registered by hand below
 const uint64_t function_table_count = 0;
 uint32_t ps3_hle_count(void) { return 0; }
-void ppu_register_function(uint64_t addr, void (*fn)(ppu_context*));
 void ps3_indirect_call(ppu_context* ctx);
 // The coroutine hook this test exercises. Weak, so the same test also builds
 // against a loader without it and shows what happens there.
@@ -83,6 +83,17 @@ int main()
     vm_base = (uint8_t*)std::calloc(1, 0x100000);
     ppu_register_function(CHAIN, chain);
     ppu_register_function(LEAF, leaf);
+    ps3emu_ppu_function registered = nullptr;
+    unsigned registry_fails = 0;
+    if (!ppu_get_registered_function(CHAIN, &registered) || registered != chain) registry_fails++;
+    ppu_register_function(CHAIN, leaf);
+    if (!ppu_get_registered_function(CHAIN, &registered) || registered != leaf) registry_fails++;
+    ppu_register_function(CHAIN, chain);
+    registered = leaf;
+    if (ppu_get_registered_function(0x30000, &registered) || registered != leaf) registry_fails++;
+    if (ppu_get_registered_function(CHAIN, nullptr)) registry_fails++;
+    std::printf("[%s] registry lookup returns exact entries and preserves failed outputs\n",
+                registry_fails ? "FAIL" : "PASS");
     const bool hook = ps3_ppu_dispatch_depth_slot && ps3_ppu_vcall_sp_slot;
     std::printf("coroutine hook ps3_ppu_dispatch_depth_slot: %s\n", hook ? "present" : "absent");
 
@@ -101,7 +112,7 @@ int main()
         if (hook) { *ps3_ppu_dispatch_depth_slot() = saved_depth; *ps3_ppu_vcall_sp_slot() = saved_vsp; }
     }
 
-    unsigned fails = 0;
+    unsigned fails = registry_fails;
     std::printf("[%s] %u of %d coroutines reached the bottom of their %d-level chain\n",
                 s_bottoms == COROUTINES ? "PASS" : "FAIL", s_bottoms, COROUTINES, LEVELS);
     fails += s_bottoms != COROUTINES;
