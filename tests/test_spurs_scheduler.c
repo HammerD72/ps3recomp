@@ -185,10 +185,44 @@ static void register_pm(unsigned ea,unsigned byte,spu_lifted_entry_fn fn,int ima
     memset(vm_base+ea,byte,16);
     spu_workload_register_img(spu_workload_fingerprint(vm_base+ea,16),fn,image,"manufactured scheduler fixture");
 }
-int main(void)
+/* SPURS_KERNEL_NOTIFY=1 with a timed pass far beyond every deadline below
+ * (built with SPURS_KERNEL_POLL_MS=60000): only an explicit publication or a
+ * returned lane can admit work, and stop must still join the coordinator. */
+static int notify_main(void)
+{
+    assert(SPURS_KERNEL_POLL_MS >= 10000 && spurs_kernel_notify());
+    register_pm(0x9200,0x33,held_policy,79);register_pm(0x9400,0x55,late_policy,81);
+    /* A publication admits kicked demand without a timed pass. */
+    assert(cellSpursInitialize((CellSpurs*)0x1000,2,0,0,0)==0);
+    assert(cellSpursAddWorkload((CellSpurs*)0x1000,(u32*)0x8000,(void*)0x9200,16,0,NULL,1,1)==0);
+    Sleep(50);assert(!atomic_load(&held[0]) && "untimed pass admitted unkicked work");
+    assert(cellSpursReadyCountStore((CellSpurs*)0x1000,0,1)==0);
+    wait_for(&held[0],1,"ReadyCountStore notification");
+    /* A notified pass admits only kicked workloads, even with a lane free. */
+    assert(cellSpursAddWorkload((CellSpurs*)0x1000,(u32*)0x8000,(void*)0x9400,16,0,NULL,1,1)==0);
+    assert(cellSpursReadyCountStore((CellSpurs*)0x1000,0,1)==0);   /* kick; wid 0 is at maxContention */
+    Sleep(50);assert(!atomic_load(&late_seen) && "untimed pass admitted unkicked work");
+    /* Fill the second lane, publish demand, then return lanes: the returned
+     * lane, not a timed pass, admits it. */
+    assert(cellSpursAddWorkload((CellSpurs*)0x1000,(u32*)0x8000,(void*)0x9200,16,0,NULL,1,1)==0);
+    assert(cellSpursReadyCountStore((CellSpurs*)0x1000,2,1)==0);
+    wait_for(&held[2],1,"second-lane publication");
+    assert(cellSpursReadyCountStore((CellSpurs*)0x1000,1,1)==0);
+    Sleep(50);assert(!atomic_load(&late_seen) && "busy lanes admitted a third policy");
+    atomic_store(&gate,1);
+    wait_for(&late_seen,1,"returned-lane notification");
+    /* Stop wakes the waiting coordinator; a lost wake would block this join. */
+    const unsigned long long before=ps3_ms_now();
+    finalize(0x1000);
+    assert(ps3_ms_now()-before<3000 && "finalize waited for a timed pass");
+    puts("SPURS notify: publication admission / returned-lane admission / prompt stop PASS");
+    free(vm_base);return 0;
+}
+int main(int argc,char** argv)
 {
     trace_setup();
     vm_base=calloc(1,ppu_vm_size);assert(vm_base);
+    if(argc>1 && !strcmp(argv[1],"notify")) return notify_main();
     /* The ninth integer argument occupies the guest stack parameter area.
      * Asymmetric high/low words distinguish BE decoding from host word reads. */
     for (u32 requested=1; requested<=6; ++requested) {
