@@ -1849,6 +1849,7 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
     unsigned trace_count=0;
 #endif
     const int notify = spurs_kernel_notify();
+    ULONGLONG next_poll = notify ? GetTickCount64() + SPURS_KERNEL_POLL_MS : 0;
     AcquireSRWLockExclusive(&si->lock);
     while (!si->stopping) {
         /* Reference mode keeps the periodic poller's native Sleep(1) cadence.
@@ -1869,9 +1870,15 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
         if (notify) {
             /* kicks is checked under the lock: a publication made while this
              * thread scanned is never lost, it just skips the wait. */
-            if (!si->kicks && !si->stopping)
-                SleepConditionVariableSRW(&si->kick, &si->lock, SPURS_KERNEL_POLL_MS, 0);
-            timed = !si->kicks;
+            ULONGLONG now = GetTickCount64();
+            if (!si->kicks && !si->stopping && now < next_poll) {
+                DWORD remaining = (DWORD)(next_poll - now);
+                SleepConditionVariableSRW(&si->kick, &si->lock, remaining, 0);
+                now = GetTickCount64();
+            }
+            /* Publication never postpones the periodic fallback deadline. */
+            timed = now >= next_poll;
+            if (timed) next_poll = now + SPURS_KERNEL_POLL_MS;
             si->kicks = 0;
 #if PS3_SPURS_SCHEDULER_OBSERVATION
             /* Observer clocks never run under the instance lock. */

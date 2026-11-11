@@ -100,9 +100,9 @@ def notify_build(directory, source):
     (directory/'build.log').write_text(built.stdout+built.stderr)
     assert built.returncode==0, 'Notify fixture must compile: '+str(directory/'build.log')
     return binary
-def notify_run(binary):
+def notify_run(binary, mode="notify"):
     try:
-        r=subprocess.run([str(binary),'notify'],env=dict(env,SPURS_KERNEL_NOTIFY='1'),cwd=binary.parent,
+        r=subprocess.run([str(binary),mode],env=dict(env,SPURS_KERNEL_NOTIFY='1'),cwd=binary.parent,
                          capture_output=True,text=True,timeout=20)
     except subprocess.TimeoutExpired:
         return None
@@ -112,7 +112,22 @@ production=(root/'libs/spurs/cellSpurs.c').read_text()
 r=notify_run(notify_build(out/'notify',production))
 assert r is not None and r.returncode==0 and 'SPURS notify: publication admission' in r.stdout, 'Notify scenario failed: '+str(out/'notify')
 print(r.stdout,end='')
+r=notify_run(out/'notify'/('fixture.exe' if os.name=='nt' else 'fixture'), 'fairness')
+assert r is not None and r.returncode==0, 'Elapsed fallback fairness failed: '+str(out/'notify')
+print(r.stdout,end='')
 notify_mutants=[]
+if args.mutants:
+    start=production.index('            ULONGLONG now = GetTickCount64();')
+    end=production.index('            si->kicks = 0;',start)
+    changed=production[:start]+"""            if (!si->kicks && !si->stopping)
+                SleepConditionVariableSRW(&si->kick, &si->lock, SPURS_KERNEL_POLL_MS, 0);
+            timed = !si->kicks;
+"""+production[end:]
+    assert changed != production
+    r=notify_run(notify_build(out/'notify-starved-fallback',changed), 'fairness')
+    assert r is not None and r.returncode!=0 and 'elapsed fallback starved' in r.stdout+r.stderr
+    notify_mutants.append('starved-fallback')
+    print('PASS notification-starved fallback mutant rejected')
 if args.mutants:
     for name,before,after,failure in [
         ('no-publication-kick','    if (value) spurs_kick(si);\n    {   static int _n = 0;','    {   static int _n = 0;','ReadyCountStore notification'),
