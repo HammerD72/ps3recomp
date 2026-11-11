@@ -75,6 +75,75 @@ assert ran.returncode == 0, 'Actual scheduler fixture failed; retain run.log'
 assert 'SPURS same workload/lane across instances retains separate LS and TLS exit classification PASS' in ran.stdout
 print('PASS actual scheduler on '+platform.system()+'; no title inputs or skipped execution')
 
+# SPURS_KERNEL_NOTIFY=1: every scenario above again with publication wake-ups,
+# then a build whose timed pass is 60 s, so only notification can admit work.
+ran = subprocess.run([str(exe)], env=dict(env,SPURS_KERNEL_NOTIFY='1'), cwd=out, capture_output=True, text=True, timeout=30)
+(out/'run-notify.log').write_text(ran.stdout+ran.stderr)
+assert ran.returncode == 0, 'Scheduler fixture failed with SPURS_KERNEL_NOTIFY=1; retain run-notify.log'
+assert 'SPURS same workload/lane across instances retains separate LS and TLS exit classification PASS' in ran.stdout
+print('PASS actual scheduler scenarios with SPURS_KERNEL_NOTIFY=1')
+def notify_build(directory, source):
+    (directory/'tests').mkdir(parents=True,exist_ok=True)
+    (directory/'libs/spurs').mkdir(parents=True,exist_ok=True)
+    shutil.copy2(root/'tests/test_spurs_scheduler.c',directory/'tests/test_spurs_scheduler.c')
+    (directory/'libs/spurs/cellSpurs.c').write_text(source)
+    binary=directory/('fixture.exe' if os.name=='nt' else 'fixture')
+    replacements={str(root/'tests/test_spurs_scheduler.c'):str(directory/'tests/test_spurs_scheduler.c'),
+                  '/Fe'+str(exe):'/Fe'+str(binary),str(exe):str(binary),
+                  '/Fo'+str(out)+os.sep:'/Fo'+str(directory)+os.sep}
+    cmd=[replacements.get(arg,arg) for arg in command]
+    flag='/' if os.name=='nt' else '-'
+    position=cmd.index('/link') if os.name=='nt' else len(cmd)
+    cmd[position:position]=[flag+'I'+str(root/path) for path in ('tests','libs/spurs')]+[flag+'DSPURS_KERNEL_POLL_MS=60000']
+    (directory/'command.json').write_text(json.dumps(cmd,indent=2))
+    built=subprocess.run(cmd,env=env,cwd=directory,capture_output=True,text=True)
+    (directory/'build.log').write_text(built.stdout+built.stderr)
+    assert built.returncode==0, 'Notify fixture must compile: '+str(directory/'build.log')
+    return binary
+def notify_run(binary, mode="notify"):
+    try:
+        r=subprocess.run([str(binary),mode],env=dict(env,SPURS_KERNEL_NOTIFY='1'),cwd=binary.parent,
+                         capture_output=True,text=True,timeout=20)
+    except subprocess.TimeoutExpired:
+        return None
+    (binary.parent/'run.log').write_text(r.stdout+r.stderr)
+    return r
+production=(root/'libs/spurs/cellSpurs.c').read_text()
+r=notify_run(notify_build(out/'notify',production))
+assert r is not None and r.returncode==0 and 'SPURS notify: publication admission' in r.stdout, 'Notify scenario failed: '+str(out/'notify')
+print(r.stdout,end='')
+r=notify_run(out/'notify'/('fixture.exe' if os.name=='nt' else 'fixture'), 'fairness')
+assert r is not None and r.returncode==0, 'Elapsed fallback fairness failed: '+str(out/'notify')
+print(r.stdout,end='')
+notify_mutants=[]
+if args.mutants:
+    start=production.index('            ULONGLONG now = GetTickCount64();')
+    end=production.index('            si->kicks = 0;',start)
+    changed=production[:start]+"""            if (!si->kicks && !si->stopping)
+                SleepConditionVariableSRW(&si->kick, &si->lock, SPURS_KERNEL_POLL_MS, 0);
+            timed = !si->kicks;
+"""+production[end:]
+    assert changed != production
+    r=notify_run(notify_build(out/'notify-starved-fallback',changed), 'fairness')
+    assert r is not None and r.returncode!=0 and 'elapsed fallback starved' in r.stdout+r.stderr
+    notify_mutants.append('starved-fallback')
+    print('PASS notification-starved fallback mutant rejected')
+if args.mutants:
+    for name,before,after,failure in [
+        ('no-publication-kick','    if (value) spurs_kick(si);\n    {   static int _n = 0;','    {   static int _n = 0;','ReadyCountStore notification'),
+        ('no-returned-lane-kick','        spurs_kick(si);   /* a lane is free: admit kicked demand now */\n','','returned-lane notification'),
+        ('untimed-admits-idle','if (!kicked && (!timed || (si->pass_no','if (!kicked && ((si->pass_no','untimed pass admitted unkicked work'),
+        ('stop-without-kick','si->stopping = 1; WakeAllConditionVariable(&si->wake); WakeAllConditionVariable(&si->kick);\n    ReleaseSRWLockExclusive(&si->lock);\n    if (si->coordinator)',
+                              'si->stopping = 1; WakeAllConditionVariable(&si->wake);\n    ReleaseSRWLockExclusive(&si->lock);\n    if (si->coordinator)',None)]:
+        assert production.count(before)==1, name
+        r=notify_run(notify_build(out/('notify-'+name),production.replace(before,after)))
+        if failure is None:
+            assert r is None, 'Mutant escaped: '+name
+        else:
+            assert r is not None and r.returncode!=0 and failure in r.stdout+r.stderr, 'Mutant escaped or failed for another reason: '+name
+        notify_mutants.append(name)
+        print('PASS notify mutant '+name+' rejected')
+
 cases=[]
 if args.mutants:
     cases += [
@@ -165,6 +234,6 @@ paths=['libs/spurs/cellSpurs.c','runtime/diag/spurs_scheduler_observer.c',
        'include/ps3emu/spurs_scheduler_observer.h','tests/test_spurs_scheduler.c',
        'tests/spurs_scheduler_observer_fixture.h','tools/test_spurs_scheduler.py']
 (out/'result.json').write_text(json.dumps({'observer_enabled':args.observe,'compiler':args.compiler,
-    'mutants_rejected':[name for name,_ in cases],
+    'mutants_rejected':[name for name,_ in cases]+notify_mutants,
     'sources':{path:hashlib.sha256((root/path).read_bytes()).hexdigest() for path in paths},
     'scope':'Actual scheduler/PM with authored dependencies. No game owner, job timeline, overhead or FPS measurement.'},indent=2))

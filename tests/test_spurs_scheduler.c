@@ -1,9 +1,30 @@
 /* Manufactured policy modules exercise the real initializer, scheduler and
  * SPU policy execution. No game code, addresses or completion substitutions. */
 #include "spurs_scheduler_observer_fixture.h"
+static atomic_ullong fixture_poll_time;
+static atomic_int fixture_poll_clock;
+static atomic_uintptr_t fixture_park_cv;
+static atomic_uint fixture_parked, fixture_stop_wakes;
+static ULONGLONG fixture_poll_now(void) {
+    return atomic_load(&fixture_poll_clock) ? atomic_load(&fixture_poll_time) : GetTickCount64();
+}
+static BOOL fixture_wait(CONDITION_VARIABLE* cv, SRWLOCK* lock, DWORD ms, ULONG flags) {
+    if ((uintptr_t)cv == atomic_load(&fixture_park_cv)) atomic_store(&fixture_parked, 1);
+    return SleepConditionVariableSRW(cv, lock, ms, flags);
+}
+static void fixture_wake_all(CONDITION_VARIABLE* cv) {
+    if ((uintptr_t)cv == atomic_load(&fixture_park_cv)) atomic_fetch_add(&fixture_stop_wakes, 1);
+    WakeAllConditionVariable(cv);
+}
+#define GetTickCount64 fixture_poll_now
+#define SleepConditionVariableSRW fixture_wait
+#define WakeAllConditionVariable fixture_wake_all
 #define spu_workload_dispatch_async fixture_unbounded_dispatch
 #include "../libs/spurs/cellSpurs.c"
 #undef spu_workload_dispatch_async
+#undef GetTickCount64
+#undef SleepConditionVariableSRW
+#undef WakeAllConditionVariable
 /* Keep lock witnesses active for authored policies that use ef_line_end,
  * whose paired unlock lives in the actual production implementation. */
 #include <assert.h>
@@ -103,6 +124,7 @@ static void fast_policy(spu_context* c)
 {
     trace_check_context(c);
     atomic_fetch_add(&fast_visits,1);
+    if (atomic_load(&fixture_poll_clock)) atomic_fetch_add(&fixture_poll_time,10000);
     c->pc=SPURS_PM_EXIT_TO_KERNEL_LS;spu_indirect_branch(c);
 }
 static void late_policy(spu_context* c) { atomic_store(&late_seen,1);finish(c); }
@@ -185,10 +207,71 @@ static void register_pm(unsigned ea,unsigned byte,spu_lifted_entry_fn fn,int ima
     memset(vm_base+ea,byte,16);
     spu_workload_register_img(spu_workload_fingerprint(vm_base+ea,16),fn,image,"manufactured scheduler fixture");
 }
-int main(void)
+/* SPURS_KERNEL_NOTIFY=1 with a timed pass far beyond every deadline below
+ * (built with SPURS_KERNEL_POLL_MS=60000): only an explicit publication or a
+ * returned lane can admit work, and stop must still join the coordinator. */
+static int fairness_main(void) {
+    atomic_store(&fixture_poll_clock,1);
+    register_pm(0x9300,0x44,fast_policy,80);register_pm(0x9400,0x55,late_policy,81);
+    assert(cellSpursInitialize((CellSpurs*)0x1000,2,0,0,0)==0);
+    assert(cellSpursAddWorkload((CellSpurs*)0x1000,(u32*)0x8000,(void*)0x9300,16,0,NULL,1,1)==0);
+    assert(cellSpursReadyCountStore((CellSpurs*)0x1000,0,1)==0);
+    wait_for(&fast_visits,100,"continuously notified ready work");
+    assert(cellSpursAddWorkload((CellSpurs*)0x1000,(u32*)0x8000,(void*)0x9400,16,0,NULL,1,1)==0);
+    wait_for(&late_seen,1,"elapsed fallback starved by notifications");
+    vm_write8(0x1080,3);finalize(0x1000);
+    puts("SPURS elapsed deadline admits fallback under continuous kicks PASS");
+    free(vm_base);return 0;
+}
+static int notify_main(void)
+{
+    assert(SPURS_KERNEL_POLL_MS >= 10000 && spurs_kernel_notify());
+    register_pm(0x9200,0x33,held_policy,79);register_pm(0x9400,0x55,late_policy,81);
+    /* A publication admits kicked demand without a timed pass. */
+    assert(cellSpursInitialize((CellSpurs*)0x1000,2,0,0,0)==0);
+    assert(cellSpursAddWorkload((CellSpurs*)0x1000,(u32*)0x8000,(void*)0x9200,16,0,NULL,1,1)==0);
+    Sleep(50);assert(!atomic_load(&held[0]) && "untimed pass admitted unkicked work");
+    assert(cellSpursReadyCountStore((CellSpurs*)0x1000,0,1)==0);
+    wait_for(&held[0],1,"ReadyCountStore notification");
+    /* A notified pass admits only kicked workloads, even with a lane free. */
+    assert(cellSpursAddWorkload((CellSpurs*)0x1000,(u32*)0x8000,(void*)0x9400,16,0,NULL,1,1)==0);
+    assert(cellSpursReadyCountStore((CellSpurs*)0x1000,0,1)==0);   /* kick; wid 0 is at maxContention */
+    Sleep(50);assert(!atomic_load(&late_seen) && "untimed pass admitted unkicked work");
+    /* Fill the second lane, publish demand, then return lanes: the returned
+     * lane, not a timed pass, admits it. */
+    assert(cellSpursAddWorkload((CellSpurs*)0x1000,(u32*)0x8000,(void*)0x9200,16,0,NULL,1,1)==0);
+    assert(cellSpursReadyCountStore((CellSpurs*)0x1000,2,1)==0);
+    wait_for(&held[2],1,"second-lane publication");
+    assert(cellSpursReadyCountStore((CellSpurs*)0x1000,1,1)==0);
+    Sleep(50);assert(!atomic_load(&late_seen) && "busy lanes admitted a third policy");
+    atomic_store(&gate,1);
+    wait_for(&late_seen,1,"returned-lane notification");
+    /* A fresh instance has no workers returning or pending publications. */
+    finalize(0x1000);
+    assert(cellSpursInitialize((CellSpurs*)0x3000,1,0,0,0)==0);
+    struct SpursInst* parked = spurs_inst_find(0x3000);
+    AcquireSRWLockExclusive(&parked->lock);
+    atomic_store(&fixture_park_cv,(uintptr_t)&parked->kick);
+    WakeConditionVariable(&parked->kick);
+    ReleaseSRWLockExclusive(&parked->lock);
+    wait_for(&fixture_parked,1,"coordinator wait entry");
+    /* Acquiring this lock proves the wait released it atomically. */
+    AcquireSRWLockExclusive(&parked->lock);
+    assert(!parked->kicks && !parked->slots[0].busy);
+    ReleaseSRWLockExclusive(&parked->lock);
+    const unsigned long long before=ps3_ms_now();
+    finalize(0x3000);
+    assert(atomic_load(&fixture_stop_wakes) && "stop did not wake the parked coordinator");
+    assert(ps3_ms_now()-before<3000 && "finalize waited for a timed pass");
+    puts("SPURS notify: publication admission / returned-lane admission / prompt stop PASS");
+    free(vm_base);return 0;
+}
+int main(int argc,char** argv)
 {
     trace_setup();
     vm_base=calloc(1,ppu_vm_size);assert(vm_base);
+    if(argc>1 && !strcmp(argv[1],"fairness")) return fairness_main();
+    if(argc>1 && !strcmp(argv[1],"notify")) return notify_main();
     /* The ninth integer argument occupies the guest stack parameter area.
      * Asymmetric high/low words distinguish BE decoding from host word reads. */
     for (u32 requested=1; requested<=6; ++requested) {
