@@ -13,7 +13,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
 #include "../spu_ea_alias.c"
+
+/* Readers query while sys_memory appends under its writer lock. */
+_Static_assert(_Generic(&s_alias_page[0], _Atomic uint8_t*: 1, default: 0),
+               "Publish alias-page answers with C11 atomics");
+_Static_assert(_Generic(&s_alias_n, _Atomic int*: 1, default: 0),
+               "Publish initialized range entries with an atomic count");
 
 static int ref_in_table(uint32_t ea)
 {
@@ -37,7 +48,8 @@ static void reset(void)
 {
     s_alias_n = 0;
     memset(s_alias, 0, sizeof s_alias);
-    memset((void*)s_alias_page, 0, sizeof s_alias_page);
+    for (uint32_t page = 0; page < SPU_ALIAS_PAGES; page++)
+        atomic_store_explicit(&s_alias_page[page], 0, memory_order_relaxed);
 }
 
 static uint64_t s_rng = 0x9E3779B97F4A7C15ull;
@@ -104,8 +116,81 @@ static void record(uint32_t addr, uint32_t size, const char* layout)
     sweep(layout, s_alias_n);
 }
 
+
+/* One allocator writer publishes while four readers exercise full-page and
+ * mixed-page answers. A published count admits only completed registrations. */
+static atomic_int readers_ready, readers_go, readers_done, published_ranges, readers_observed;
+static atomic_uint concurrent_probes, concurrent_failures;
+#ifdef _WIN32
+static DWORD WINAPI concurrent_reader(void* unused)
+#else
+static void* concurrent_reader(void* unused)
+#endif
+{
+    (void)unused;
+    atomic_fetch_add(&readers_ready, 1);
+    while (!atomic_load(&readers_go)) {}
+    while (!atomic_load(&readers_done)) {
+        const int published = atomic_load(&published_ranges);
+        for (int range = 0; range < SPU_ALIAS_MAX; range++) {
+            const uint32_t ea = 0x45000010u + (uint32_t)range * 0x2000u;
+            const uint32_t got = sysmem_spu_alias_fixup(ea);
+            if ((range < published && got != ea - 0x05000000u) ||
+                (got != ea && got != ea - 0x05000000u))
+                atomic_fetch_add(&concurrent_failures, 1);
+        }
+        atomic_fetch_add(&concurrent_probes, SPU_ALIAS_MAX);
+        atomic_store(&readers_observed, published);
+    }
+    return 0;
+}
+
+static void check_concurrent_registration(void)
+{
+    reset();
+#ifdef _WIN32
+    HANDLE readers[4];
+    for (int i = 0; i < 4; i++) {
+        readers[i] = CreateThread(NULL, 0, concurrent_reader, NULL, 0, NULL);
+        if (!readers[i]) exit(1);
+    }
+#else
+    pthread_t readers[4];
+    for (int i = 0; i < 4; i++)
+        if (pthread_create(&readers[i], NULL, concurrent_reader, NULL)) exit(1);
+#endif
+    while (atomic_load(&readers_ready) != 4) {}
+    atomic_store(&readers_go, 1);
+    while (atomic_load(&concurrent_probes) < 128) {}
+    for (int range = 0; range < SPU_ALIAS_MAX; range++) {
+        const uint32_t addr = 0x40000000u + (uint32_t)range * 0x2000u;
+        sysmem_alias_record(addr + (range & 1 ? 1u : 0u), 0x1000u);
+        atomic_store(&published_ranges, range + 1);
+        while (atomic_load(&readers_observed) < range + 1) {}
+    }
+    atomic_store(&readers_done, 1);
+#ifdef _WIN32
+    for (int i = 0; i < 4; i++) {
+        DWORD code;
+        if (WaitForSingleObject(readers[i], 10000) != WAIT_OBJECT_0 ||
+            !GetExitCodeThread(readers[i], &code) || code || !CloseHandle(readers[i])) exit(1);
+    }
+#else
+    for (int i = 0; i < 4; i++)
+        if (pthread_join(readers[i], NULL)) exit(1);
+#endif
+    if (atomic_load(&concurrent_failures)) {
+        fprintf(stderr, "FAIL concurrent range publication\n");
+        exit(1);
+    }
+    sweep("concurrent registrations complete", SPU_ALIAS_MAX);
+    puts("PASS concurrent full/mixed-page publication with four readers");
+}
+
 int main(void)
 {
+    check_concurrent_registration();
+    s_rng = 0x9E3779B97F4A7C15ull;
     reset(); sweep("empty", 0);
 
     /* The sys_memory bump layout: 24 MiB blocks from 0x40000000, so the

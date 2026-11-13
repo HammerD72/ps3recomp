@@ -4,7 +4,9 @@
 Builds runtime/syscalls/tests/test_spu_ea_alias.c against the production
 runtime/syscalls/spu_ea_alias.c, which must answer every probe exactly like
 the previous two-scan implementation. With --mutants, each mutated copy of
-the production file must build and then fail the contract. No game input; no
+the production file must build and then fail the contract. Concurrent readers
+also check completed full/mixed-page registrations, and type assertions reject
+non-atomic page/count publication. No game input; no
 performance claim."""
 import argparse
 import json
@@ -44,7 +46,7 @@ def build_and_run(name, source_text, compiler):
         cmd = [compiler, '/nologo', '/O2', '/W3', '/WX', '/D_CRT_SECURE_NO_WARNINGS', src,
                '/Fo' + str(tests) + os.sep, '/Fe' + str(exe)]
     else:
-        cmd = [compiler, '-std=gnu17', '-O2', '-Wall', '-Wextra', '-Werror', src, '-o', str(exe)]
+        cmd = [compiler, '-std=gnu17', '-O2', '-Wall', '-Wextra', '-Werror', '-pthread', src, '-o', str(exe)]
     b = subprocess.run(cmd, capture_output=True, text=True, errors='replace')
     (folder / 'build.log').write_text(' '.join(cmd) + '\n' + b.stdout + b.stderr, encoding='utf-8')
     if b.returncode:
